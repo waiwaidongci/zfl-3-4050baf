@@ -250,6 +250,77 @@ export function normalizeDepositRecords(rawRecords, gearList, requestList) {
   return { data, warnings };
 }
 
+const INVENTORY_TYPES = ['出行前', '出行后'];
+const INVENTORY_STATUSES = ['进行中', '已完成'];
+const ITEM_CHECK_STATUSES = ['待盘点', '已盘点', '缺失'];
+
+export function normalizeInventoryItems(rawItems, gearList) {
+  const warnings = [];
+  if (!Array.isArray(rawItems)) {
+    warnings.push('盘点项数据不是数组，已重置为空');
+    return { data: [], warnings };
+  }
+  const data = rawItems.map((item, index) => {
+    if (!item || typeof item !== 'object') {
+      warnings.push(`盘点项第 ${index + 1} 条数据格式异常，已跳过`);
+      return null;
+    }
+    const gear = findGearByIdOrName(gearList, item.gearId, item.gearName, item.owner);
+    if (!gear && !item.gearName) {
+      warnings.push(`盘点项第 ${index + 1} 条无法匹配装备且无装备名，已标记为未知装备`);
+    }
+    const checkStatus = ITEM_CHECK_STATUSES.includes(item.checkStatus)
+      ? item.checkStatus
+      : '待盘点';
+    return {
+      id: item.id || crypto.randomUUID(),
+      gearId: gear ? gear.id : (item.gearId || ''),
+      gearName: gear ? gear.name : (item.gearName || '未知装备'),
+      owner: gear ? gear.owner : (item.owner || ''),
+      checkStatus,
+      missingAccessories: item.missingAccessories || '',
+      notes: item.notes || ''
+    };
+  }).filter(Boolean);
+  return { data, warnings };
+}
+
+export function normalizeInventoryLists(rawLists, gearList, tripList, memberList) {
+  const warnings = [];
+  if (!Array.isArray(rawLists)) {
+    warnings.push('盘点单数据不是数组，已重置为空');
+    return { data: [], warnings };
+  }
+  const memberNames = memberList.map((m) => m.nickname);
+  const data = rawLists.map((list, index) => {
+    if (!list || typeof list !== 'object') {
+      warnings.push(`盘点单第 ${index + 1} 条数据格式异常，已跳过`);
+      return null;
+    }
+    const trip = tripList.find((t) => t.id === list.tripId);
+    const type = INVENTORY_TYPES.includes(list.type) ? list.type : '出行前';
+    const status = INVENTORY_STATUSES.includes(list.status) ? list.status : '进行中';
+    const checker = memberNames.includes(list.checker) ? list.checker : (list.checker || '');
+    const itemsResult = normalizeInventoryItems(list.items || [], gearList);
+    warnings.push(...itemsResult.warnings.map((w) => `盘点单「${list.name || '未命名'}」：${w}`));
+    return {
+      id: list.id || crypto.randomUUID(),
+      name: list.name || '未命名盘点',
+      type,
+      tripId: trip ? trip.id : (list.tripId || ''),
+      tripName: trip ? trip.destination : (list.tripName || ''),
+      date: list.date || iso(0),
+      status,
+      checker,
+      notes: list.notes || '',
+      items: itemsResult.data,
+      createdAt: list.createdAt || new Date().toISOString(),
+      updatedAt: list.updatedAt || new Date().toISOString()
+    };
+  }).filter(Boolean);
+  return { data, warnings };
+}
+
 export function validateAndNormalizeImportData(rawData) {
   const allWarnings = [];
   const errors = [];
@@ -271,7 +342,8 @@ export function validateAndNormalizeImportData(rawData) {
     maintenanceRecords: rawData.maintenanceRecords !== undefined || rawData.maintenance !== undefined,
     trips: rawData.trips !== undefined,
     handoverRecords: rawData.handoverRecords !== undefined || rawData.handovers !== undefined,
-    depositRecords: rawData.depositRecords !== undefined || rawData.deposits !== undefined
+    depositRecords: rawData.depositRecords !== undefined || rawData.deposits !== undefined,
+    inventoryLists: rawData.inventoryLists !== undefined
   };
 
   const source = {
@@ -281,7 +353,8 @@ export function validateAndNormalizeImportData(rawData) {
     maintenanceRecords: rawData.maintenanceRecords || rawData.maintenance || [],
     trips: rawData.trips || [],
     handoverRecords: rawData.handoverRecords || rawData.handovers || [],
-    depositRecords: rawData.depositRecords || rawData.deposits || []
+    depositRecords: rawData.depositRecords || rawData.deposits || [],
+    inventoryLists: rawData.inventoryLists || []
   };
 
   if (isLegacyFormat) {
@@ -343,6 +416,18 @@ export function validateAndNormalizeImportData(rawData) {
     summary.depositRecords = depositResult.data.length;
   }
 
+  const inventoryResult = normalizeInventoryLists(
+    source.inventoryLists,
+    gearsResult.data,
+    tripsResult.data,
+    membersResult.data
+  );
+  allWarnings.push(...inventoryResult.warnings);
+  if (entityPresence.inventoryLists) {
+    normalizedData.inventoryLists = inventoryResult.data;
+    summary.inventoryLists = inventoryResult.data.length;
+  }
+
   summary.totalWarnings = allWarnings.length;
 
   return {
@@ -361,7 +446,8 @@ export const ENTITY_LABELS = {
   maintenanceRecords: '保养记录',
   trips: '出行',
   handoverRecords: '交接',
-  depositRecords: '押金'
+  depositRecords: '押金',
+  inventoryLists: '盘点单'
 };
 
 export const DATA_ENTITIES = Object.keys(ENTITY_LABELS);

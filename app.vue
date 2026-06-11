@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import DataImportExport from './components/DataImportExport.vue';
 import EquipmentHealthProfile from './components/EquipmentHealthProfile.vue';
+import InventoryPanel from './components/InventoryPanel.vue';
 import {
   safeParseJSON,
   SPACE_LIST_KEY,
@@ -528,6 +529,14 @@ const depositRecords = computed({
   }
 });
 
+const inventoryLists = computed({
+  get: () => getCurrentSpaceData()?.inventoryLists || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.inventoryLists = val;
+  }
+});
+
 const currentUser = ref('阿岚');
 const showHealthProfile = ref(false);
 const currentHealthGearId = ref('');
@@ -651,6 +660,7 @@ watch(maintenanceRecords, () => currentSpaceId.value && saveSpaceData(currentSpa
 watch(trips, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(handoverRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(depositRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(inventoryLists, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 
 function createDepositRecord(requestId) {
   const req = requests.value.find((r) => r.id === requestId);
@@ -1075,6 +1085,28 @@ const lastMaintenanceByGear = computed(() => {
 });
 const maintenanceCount = computed(() => validMaintenanceRecords.value.length);
 
+const lastInventoryByGear = computed(() => {
+  const map = {};
+  for (const list of inventoryLists.value) {
+    for (const item of list.items) {
+      if (!item.gearId) continue;
+      if (!map[item.gearId] || list.date > map[item.gearId].date) {
+        map[item.gearId] = {
+          inventoryId: list.id,
+          inventoryName: list.name,
+          date: list.date,
+          type: list.type,
+          checkStatus: item.checkStatus,
+          missingAccessories: item.missingAccessories,
+          notes: item.notes,
+          checker: list.checker
+        };
+      }
+    }
+  }
+  return map;
+});
+
 const selectedTrip = computed(() => trips.value.find((t) => t.id === selectedTripId.value));
 const pendingGears = computed(() => selectedTrip.value ? selectedTrip.value.gears.filter((g) => g.status === '待借') : []);
 const confirmedGears = computed(() => selectedTrip.value ? selectedTrip.value.gears.filter((g) => g.status === '已确认') : []);
@@ -1161,6 +1193,14 @@ function isGearAvailable(gearId) {
 function getGearStatus(gearId) {
   const gear = gears.value.find((g) => g.id === gearId);
   return gear ? gear.status : '未知';
+}
+
+function getInventoryStatusLabel(status) {
+  switch (status) {
+    case '已盘点': return '✅ 已盘点';
+    case '缺失': return '❌ 缺失';
+    default: return '⭕ 待盘点';
+  }
 }
 
 function toggleTripGearSelection(gearId) {
@@ -1775,7 +1815,7 @@ function closeHealthProfile() {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -1788,6 +1828,7 @@ function closeHealthProfile() {
       <article><strong>¥{{ totalDepositDeducted }}</strong><span>累计扣除</span></article>
       <article><strong>{{ maintenanceCount }}</strong><span>保养记录</span></article>
       <article><strong>{{ tripsCount }}</strong><span>出行计划</span></article>
+      <article><strong>{{ inventoryLists.length }}</strong><span>盘点单</span></article>
       <article><strong>{{ members.length }}</strong><span>社群成员</span></article>
     </section>
 
@@ -1831,6 +1872,19 @@ function closeHealthProfile() {
               <span>{{ lastMaintenanceByGear[gear.id].date }} · {{ lastMaintenanceByGear[gear.id].type }}</span>
               <div v-if="lastMaintenanceByGear[gear.id].description" style="margin-top: 4px; color: #63705d;">
                 {{ lastMaintenanceByGear[gear.id].description }}
+              </div>
+            </div>
+            <div v-if="lastInventoryByGear[gear.id]" class="inventory-badge" style="margin-top: 8px; padding: 8px 10px; background: #f0f4ff; border-radius: 6px; font-size: 12px;">
+              <span style="color: #2c5a8a; font-weight: 600;">最近盘点：</span>
+              <span>{{ lastInventoryByGear[gear.id].date }} · {{ lastInventoryByGear[gear.id].type }}</span>
+              <span :class="['inventory-status-tag', lastInventoryByGear[gear.id].checkStatus]" style="margin-left: 6px;">
+                {{ getInventoryStatusLabel(lastInventoryByGear[gear.id].checkStatus) }}
+              </span>
+              <div v-if="lastInventoryByGear[gear.id].missingAccessories" style="margin-top: 4px; color: #b02a2a;">
+                缺失配件：{{ lastInventoryByGear[gear.id].missingAccessories }}
+              </div>
+              <div v-if="lastInventoryByGear[gear.id].notes" style="margin-top: 4px; color: #63705d;">
+                备注：{{ lastInventoryByGear[gear.id].notes }}
               </div>
             </div>
             <button
@@ -2412,6 +2466,16 @@ function closeHealthProfile() {
         </div>
       </div>
     </section>
+
+    <InventoryPanel
+      v-if="tab === '装备盘点'"
+      :inventory-lists="inventoryLists"
+      :gears="gears"
+      :trips="trips"
+      :members="members"
+      :current-user="currentUser"
+      @update:inventory-lists="val => inventoryLists = val"
+    />
 
     <section v-if="tab === '我的借出' || tab === '我的借入'" class="panel">
       <h2>{{ tab }}</h2>
