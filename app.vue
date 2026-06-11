@@ -42,11 +42,32 @@ const requests = ref([
   { id: crypto.randomUUID(), gearId: gears.value[2].id, gearName: '营地灯三件组', owner: '小北', borrower: '陈默', start: iso(3), end: iso(5), status: '待处理', reason: '夜钓备用', damage: '' }
 ]);
 
-const maintenanceRecords = ref([
-  { id: crypto.randomUUID(), gearId: gears.value[0].id, gearName: '双人轻量帐', owner: '阿岚', date: iso(-7), type: '清洁', description: '内外帐全面擦拭，通风晾干', handler: '阿岚' },
-  { id: crypto.randomUUID(), gearId: gears.value[0].id, gearName: '双人轻量帐', owner: '阿岚', date: iso(-20), type: '检查', description: '检查地钉和防风绳，状态良好', handler: '阿岚' },
-  { id: crypto.randomUUID(), gearId: gears.value[1].id, gearName: '炉头套装', owner: '梁序', date: iso(-3), type: '补件', description: '更换了新的密封圈和点火电极', handler: '梁序' }
-]);
+function findGearForMaintenance(record, gearList = gears.value) {
+  return gearList.find((gear) => gear.id === record.gearId)
+    || gearList.find((gear) => gear.name === record.gearName && gear.owner === record.owner);
+}
+
+function normalizeMaintenanceRecords(records, gearList = gears.value) {
+  return records
+    .map((record) => {
+      const gear = findGearForMaintenance(record, gearList);
+      return gear ? { ...record, gearId: gear.id, gearName: gear.name, owner: gear.owner } : null;
+    })
+    .filter(Boolean);
+}
+
+function createDefaultMaintenanceRecords(gearList = gears.value) {
+  const findGear = (name, owner) => gearList.find((gear) => gear.name === name && gear.owner === owner);
+  const tent = findGear('双人轻量帐', '阿岚');
+  const stove = findGear('炉头套装', '梁序');
+  return [
+    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-7), type: '清洁', description: '内外帐全面擦拭，通风晾干', handler: '阿岚' },
+    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-20), type: '检查', description: '检查地钉和防风绳，状态良好', handler: '阿岚' },
+    stove && { id: crypto.randomUUID(), gearId: stove.id, gearName: stove.name, owner: stove.owner, date: iso(-3), type: '补件', description: '更换了新的密封圈和点火电极', handler: '梁序' }
+  ].filter(Boolean);
+}
+
+const maintenanceRecords = ref(createDefaultMaintenanceRecords());
 
 onMounted(() => {
   const storedMembers = localStorage.getItem('zfl-3-members');
@@ -56,7 +77,9 @@ onMounted(() => {
   if (storedMembers) members.value = JSON.parse(storedMembers);
   if (storedGears) gears.value = JSON.parse(storedGears);
   if (storedRequests) requests.value = JSON.parse(storedRequests);
-  if (storedMaintenance) maintenanceRecords.value = JSON.parse(storedMaintenance);
+  maintenanceRecords.value = storedMaintenance
+    ? normalizeMaintenanceRecords(JSON.parse(storedMaintenance), gears.value)
+    : createDefaultMaintenanceRecords(gears.value);
 });
 
 watch(members, (value) => localStorage.setItem('zfl-3-members', JSON.stringify(value)), { deep: true });
@@ -89,7 +112,7 @@ const lastMaintenanceByGear = computed(() => {
   }
   return map;
 });
-const maintenanceCount = computed(() => maintenanceRecords.value.length);
+const maintenanceCount = computed(() => validMaintenanceRecords.value.length);
 
 function addGear() {
   if (!form.value.name.trim()) return;
