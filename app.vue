@@ -237,18 +237,35 @@ const weekDates = computed(() => {
   }
   return dates;
 });
-const calendarGearOptions = computed(() => ['全部', ...new Set(requests.value.map((r) => r.gearName).filter(Boolean))]);
+const calendarGearOptions = computed(() => {
+  const map = new Map();
+  for (const r of requests.value) {
+    if (!r.gearId) continue;
+    if (r.status === '已拒绝' || r.status === '已归还') continue;
+    if (!map.has(r.gearId)) {
+      map.set(r.gearId, { gearId: r.gearId, gearName: r.gearName || '未知装备', owner: r.owner || '' });
+    }
+  }
+  const items = Array.from(map.values()).map((g) => ({
+    value: g.gearId,
+    label: g.owner ? `${g.gearName}（${g.owner}）` : g.gearName
+  }));
+  return [{ value: '全部', label: '全部' }, ...items];
+});
 const calendarMemberOptions = computed(() => ['全部', ...members.value.map((m) => m.nickname)]);
 const calendarRows = computed(() => {
   if (calendarViewMode.value === '按装备') {
-    const gearNames = calendarFilterValue.value === '全部'
-      ? [...new Set(requests.value.map((r) => r.gearName).filter(Boolean))]
-      : [calendarFilterValue.value];
-    return gearNames.map((name) => ({
-      key: name,
-      label: name,
-      type: 'gear'
-    }));
+    const map = new Map();
+    const sourceReqs = requests.value.filter((r) => r.status !== '已拒绝' && r.status !== '已归还');
+    for (const r of sourceReqs) {
+      if (!r.gearId) continue;
+      if (calendarFilterValue.value !== '全部' && r.gearId !== calendarFilterValue.value) continue;
+      if (!map.has(r.gearId)) {
+        const label = r.owner ? `${r.gearName || '未知装备'}（${r.owner}）` : (r.gearName || '未知装备');
+        map.set(r.gearId, { key: r.gearId, label, type: 'gear' });
+      }
+    }
+    return Array.from(map.values());
   } else {
     const memberNames = calendarFilterValue.value === '全部'
       ? members.value.map((m) => m.nickname)
@@ -264,7 +281,7 @@ function getRequestsForCell(rowKey, rowType, dateStr) {
   const date = new Date(dateStr);
   return requests.value.filter((req) => {
     if (req.status === '已拒绝' || req.status === '已归还') return false;
-    if (rowType === 'gear' && req.gearName !== rowKey) return false;
+    if (rowType === 'gear' && req.gearId !== rowKey) return false;
     if (rowType === 'member' && req.borrower !== rowKey) return false;
     const reqStart = new Date(req.start);
     const reqEnd = new Date(req.end);
@@ -720,7 +737,12 @@ function deleteMaintenance(id) {
           <label>
             {{ calendarViewMode === '按装备' ? '装备筛选' : '成员筛选' }}
             <select v-model="calendarFilterValue">
-              <option v-for="opt in (calendarViewMode === '按装备' ? calendarGearOptions : calendarMemberOptions)" :key="opt">{{ opt }}</option>
+              <template v-if="calendarViewMode === '按装备'">
+                <option v-for="opt in calendarGearOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+              </template>
+              <template v-else>
+                <option v-for="opt in calendarMemberOptions" :key="opt">{{ opt }}</option>
+              </template>
             </select>
           </label>
         </div>
