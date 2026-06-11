@@ -28,7 +28,6 @@ const editingMemberId = ref(null);
 const deleteWarning = ref('');
 
 const maintenanceTypes = ['清洁', '维修', '补件', '检查'];
-const maintenanceRecords = ref([]);
 const maintenanceForm = ref({ gearId: '', date: iso(0), type: '清洁', description: '', handler: '' });
 const maintenanceFilter = ref('全部装备');
 
@@ -41,6 +40,12 @@ const gears = ref([
 const requests = ref([
   { id: crypto.randomUUID(), gearId: gears.value[1].id, gearName: '炉头套装', owner: '梁序', borrower: '阿岚', start: iso(-1), end: iso(2), status: '已同意', reason: '周末湖边露营', damage: '' },
   { id: crypto.randomUUID(), gearId: gears.value[2].id, gearName: '营地灯三件组', owner: '小北', borrower: '陈默', start: iso(3), end: iso(5), status: '待处理', reason: '夜钓备用', damage: '' }
+]);
+
+const maintenanceRecords = ref([
+  { id: crypto.randomUUID(), gearId: gears.value[0].id, gearName: '双人轻量帐', owner: '阿岚', date: iso(-7), type: '清洁', description: '内外帐全面擦拭，通风晾干', handler: '阿岚' },
+  { id: crypto.randomUUID(), gearId: gears.value[0].id, gearName: '双人轻量帐', owner: '阿岚', date: iso(-20), type: '检查', description: '检查地钉和防风绳，状态良好', handler: '阿岚' },
+  { id: crypto.randomUUID(), gearId: gears.value[1].id, gearName: '炉头套装', owner: '梁序', date: iso(-3), type: '补件', description: '更换了新的密封圈和点火电极', handler: '梁序' }
 ]);
 
 onMounted(() => {
@@ -66,19 +71,18 @@ const myOut = computed(() => requests.value.filter((item) => item.owner === curr
 const myIn = computed(() => requests.value.filter((item) => item.borrower === currentUser.value));
 
 const myGears = computed(() => gears.value.filter((gear) => gear.owner === currentUser.value));
-const maintenanceGearOptions = computed(() => ['全部装备', ...new Set(maintenanceRecords.value.map((r) => r.gearName))]);
+const validMaintenanceRecords = computed(() =>
+  maintenanceRecords.value.filter((r) => gears.value.some((g) => g.id === r.gearId))
+);
+const maintenanceGearOptions = computed(() => ['全部装备', ...new Set(validMaintenanceRecords.value.map((r) => r.gearName))]);
 const filteredMaintenance = computed(() => {
-  const list = maintenanceRecords.value.filter((r) => {
-    const gearExists = gears.value.some((g) => g.id === r.gearId);
-    return gearExists;
-  });
   return maintenanceFilter.value === '全部装备'
-    ? list
-    : list.filter((r) => r.gearName === maintenanceFilter.value);
+    ? validMaintenanceRecords.value
+    : validMaintenanceRecords.value.filter((r) => r.gearName === maintenanceFilter.value);
 });
 const lastMaintenanceByGear = computed(() => {
   const map = {};
-  for (const record of maintenanceRecords.value) {
+  for (const record of validMaintenanceRecords.value) {
     if (!map[record.gearId] || record.date > map[record.gearId].date) {
       map[record.gearId] = record;
     }
