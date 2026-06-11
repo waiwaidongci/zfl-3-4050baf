@@ -8,13 +8,29 @@ const iso = (offset = 0) => {
   return date.toISOString().slice(0, 10);
 };
 
-const members = ['阿岚', '梁序', '小北', '陈默'];
+const defaultMembers = [
+  { id: crypto.randomUUID(), nickname: '阿岚', phone: '', area: '', notes: '' },
+  { id: crypto.randomUUID(), nickname: '梁序', phone: '', area: '', notes: '' },
+  { id: crypto.randomUUID(), nickname: '小北', phone: '', area: '', notes: '' },
+  { id: crypto.randomUUID(), nickname: '陈默', phone: '', area: '', notes: '' }
+];
+
+const members = ref(defaultMembers);
 const currentUser = ref('阿岚');
 const tab = ref('装备库');
 const category = ref('全部分类');
 const requestFilter = ref('全部申请');
 const form = ref({ name: '', category: '帐篷天幕', owner: '阿岚', available: iso(2), deposit: '100', status: '可借', notes: '' });
 const requestForm = ref({ gearId: '', borrower: '梁序', start: iso(2), end: iso(4), reason: '' });
+
+const memberForm = ref({ nickname: '', phone: '', area: '', notes: '' });
+const editingMemberId = ref(null);
+const deleteWarning = ref('');
+
+const maintenanceTypes = ['清洁', '维修', '补件', '检查'];
+const maintenanceRecords = ref([]);
+const maintenanceForm = ref({ gearId: '', date: iso(0), type: '清洁', description: '', handler: '' });
+const maintenanceFilter = ref('全部装备');
 
 const gears = ref([
   { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: '阿岚', available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
@@ -28,20 +44,48 @@ const requests = ref([
 ]);
 
 onMounted(() => {
+  const storedMembers = localStorage.getItem('zfl-3-members');
   const storedGears = localStorage.getItem('zfl-3-gears');
   const storedRequests = localStorage.getItem('zfl-3-requests');
+  const storedMaintenance = localStorage.getItem('zfl-3-maintenance');
+  if (storedMembers) members.value = JSON.parse(storedMembers);
   if (storedGears) gears.value = JSON.parse(storedGears);
   if (storedRequests) requests.value = JSON.parse(storedRequests);
+  if (storedMaintenance) maintenanceRecords.value = JSON.parse(storedMaintenance);
 });
 
+watch(members, (value) => localStorage.setItem('zfl-3-members', JSON.stringify(value)), { deep: true });
 watch(gears, (value) => localStorage.setItem('zfl-3-gears', JSON.stringify(value)), { deep: true });
 watch(requests, (value) => localStorage.setItem('zfl-3-requests', JSON.stringify(value)), { deep: true });
+watch(maintenanceRecords, (value) => localStorage.setItem('zfl-3-maintenance', JSON.stringify(value)), { deep: true });
 
 const categories = computed(() => ['全部分类', ...new Set(gears.value.map((gear) => gear.category))]);
 const filteredGears = computed(() => gears.value.filter((gear) => category.value === '全部分类' || gear.category === category.value));
 const requestList = computed(() => requests.value.filter((item) => requestFilter.value === '全部申请' || item.status === requestFilter.value));
 const myOut = computed(() => requests.value.filter((item) => item.owner === currentUser.value));
 const myIn = computed(() => requests.value.filter((item) => item.borrower === currentUser.value));
+
+const myGears = computed(() => gears.value.filter((gear) => gear.owner === currentUser.value));
+const maintenanceGearOptions = computed(() => ['全部装备', ...new Set(maintenanceRecords.value.map((r) => r.gearName))]);
+const filteredMaintenance = computed(() => {
+  const list = maintenanceRecords.value.filter((r) => {
+    const gearExists = gears.value.some((g) => g.id === r.gearId);
+    return gearExists;
+  });
+  return maintenanceFilter.value === '全部装备'
+    ? list
+    : list.filter((r) => r.gearName === maintenanceFilter.value);
+});
+const lastMaintenanceByGear = computed(() => {
+  const map = {};
+  for (const record of maintenanceRecords.value) {
+    if (!map[record.gearId] || record.date > map[record.gearId].date) {
+      map[record.gearId] = record;
+    }
+  }
+  return map;
+});
+const maintenanceCount = computed(() => maintenanceRecords.value.length);
 
 function addGear() {
   if (!form.value.name.trim()) return;
@@ -69,6 +113,104 @@ function returnGear(record) {
   requests.value = requests.value.map((item) => item.id === record.id ? { ...item, status: '已归还', damage: damage || '无' } : item);
   gears.value = gears.value.map((gear) => gear.id === record.gearId ? { ...gear, status: '可借', damage: damage || '无' } : gear);
 }
+
+function saveMember() {
+  if (!memberForm.value.nickname.trim()) return;
+  if (editingMemberId.value) {
+    const oldMember = members.value.find((m) => m.id === editingMemberId.value);
+    const oldNickname = oldMember ? oldMember.nickname : '';
+    const newNickname = memberForm.value.nickname.trim();
+    members.value = members.value.map((m) =>
+      m.id === editingMemberId.value
+        ? { ...m, nickname: newNickname, phone: memberForm.value.phone, area: memberForm.value.area, notes: memberForm.value.notes }
+        : m
+    );
+    if (oldNickname !== newNickname) {
+      gears.value = gears.value.map((g) => g.owner === oldNickname ? { ...g, owner: newNickname } : g);
+      requests.value = requests.value.map((r) => ({
+        ...r,
+        owner: r.owner === oldNickname ? newNickname : r.owner,
+        borrower: r.borrower === oldNickname ? newNickname : r.borrower
+      }));
+      maintenanceRecords.value = maintenanceRecords.value.map((r) => ({
+        ...r,
+        owner: r.owner === oldNickname ? newNickname : r.owner,
+        handler: r.handler === oldNickname ? newNickname : r.handler
+      }));
+      if (currentUser.value === oldNickname) currentUser.value = newNickname;
+      if (form.value.owner === oldNickname) form.value.owner = newNickname;
+      if (requestForm.value.borrower === oldNickname) requestForm.value.borrower = newNickname;
+    }
+    editingMemberId.value = null;
+  } else {
+    members.value = [{ id: crypto.randomUUID(), nickname: memberForm.value.nickname.trim(), phone: memberForm.value.phone, area: memberForm.value.area, notes: memberForm.value.notes }, ...members.value];
+  }
+  memberForm.value = { nickname: '', phone: '', area: '', notes: '' };
+}
+
+function editMember(member) {
+  editingMemberId.value = member.id;
+  memberForm.value = { nickname: member.nickname, phone: member.phone, area: member.area, notes: member.notes };
+}
+
+function cancelEditMember() {
+  editingMemberId.value = null;
+  memberForm.value = { nickname: '', phone: '', area: '', notes: '' };
+}
+
+function deleteMember(member) {
+  const nickname = member.nickname;
+  const gearCount = gears.value.filter((g) => g.owner === nickname).length;
+  const borrowCount = requests.value.filter((r) => r.borrower === nickname).length;
+  const ownCount = requests.value.filter((r) => r.owner === nickname).length;
+  const maintenanceOwnerCount = maintenanceRecords.value.filter((r) => r.owner === nickname).length;
+  const maintenanceHandlerCount = maintenanceRecords.value.filter((r) => r.handler === nickname).length;
+  if (gearCount > 0 || borrowCount > 0 || ownCount > 0 || maintenanceOwnerCount > 0 || maintenanceHandlerCount > 0) {
+    const reasons = [];
+    if (gearCount > 0) reasons.push(`${gearCount}件登记装备`);
+    if (ownCount > 0) reasons.push(`${ownCount}条作为出借人的申请`);
+    if (borrowCount > 0) reasons.push(`${borrowCount}条作为借用人的申请`);
+    if (maintenanceOwnerCount > 0) reasons.push(`${maintenanceOwnerCount}条装备保养记录`);
+    if (maintenanceHandlerCount > 0) reasons.push(`${maintenanceHandlerCount}条作为处理人的保养记录`);
+    deleteWarning.value = `无法删除「${nickname}」：该成员关联了${reasons.join('、')}，请先处理关联数据。`;
+    return;
+  }
+  members.value = members.value.filter((m) => m.id !== member.id);
+  if (currentUser.value === nickname && members.value.length > 0) {
+    currentUser.value = members.value[0].nickname;
+  }
+  deleteWarning.value = '';
+}
+
+function dismissWarning() {
+  deleteWarning.value = '';
+}
+
+function addMaintenance() {
+  const gear = gears.value.find((g) => g.id === maintenanceForm.value.gearId);
+  if (!gear) return;
+  if (gear.owner !== currentUser.value) {
+    alert('仅装备主人可登记保养记录');
+    return;
+  }
+  const handler = maintenanceForm.value.handler.trim() || currentUser.value;
+  maintenanceRecords.value = [{
+    id: crypto.randomUUID(),
+    gearId: gear.id,
+    gearName: gear.name,
+    owner: gear.owner,
+    date: maintenanceForm.value.date,
+    type: maintenanceForm.value.type,
+    description: maintenanceForm.value.description,
+    handler
+  }, ...maintenanceRecords.value];
+  maintenanceForm.value = { gearId: '', date: iso(0), type: '清洁', description: '', handler: '' };
+}
+
+function deleteMaintenance(id) {
+  if (!confirm('确定删除该保养记录？')) return;
+  maintenanceRecords.value = maintenanceRecords.value.filter((r) => r.id !== id);
+}
 </script>
 
 <template>
@@ -81,20 +223,21 @@ function returnGear(record) {
       <label>
         当前成员
         <select v-model="currentUser">
-          <option v-for="member in members" :key="member">{{ member }}</option>
+          <option v-for="member in members" :key="member.id">{{ member.nickname }}</option>
         </select>
       </label>
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','申请列表','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','申请列表','保养记录','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
       <article><strong>{{ gears.length }}</strong><span>登记装备</span></article>
       <article><strong>{{ gears.filter((item) => item.status === '可借').length }}</strong><span>当前可借</span></article>
       <article><strong>{{ requests.filter((item) => item.status === '待处理').length }}</strong><span>待处理申请</span></article>
-      <article><strong>{{ requests.filter((item) => item.status === '已归还').length }}</strong><span>完成归还</span></article>
+      <article><strong>{{ maintenanceCount }}</strong><span>保养记录</span></article>
+      <article><strong>{{ members.length }}</strong><span>社群成员</span></article>
     </section>
 
     <section v-if="tab === '装备库'" class="layout">
@@ -109,7 +252,7 @@ function returnGear(record) {
           <option>安全急救</option>
         </select>
         <select v-model="form.owner">
-          <option v-for="member in members" :key="member">{{ member }}</option>
+          <option v-for="member in members" :key="member.id">{{ member.nickname }}</option>
         </select>
         <div class="split">
           <input v-model="form.available" type="date" />
@@ -132,6 +275,13 @@ function returnGear(record) {
             <span>{{ gear.category }} · {{ gear.owner }}</span>
             <p>{{ gear.status }} · 可借日期{{ gear.available }} · 押金{{ gear.deposit }}</p>
             <small>{{ gear.notes }}</small>
+            <div v-if="lastMaintenanceByGear[gear.id]" class="maintenance-badge" style="margin-top: 10px; padding: 8px 10px; background: #edf1e8; border-radius: 6px; font-size: 12px;">
+              <span style="color: #2f4a2c; font-weight: 600;">最近保养：</span>
+              <span>{{ lastMaintenanceByGear[gear.id].date }} · {{ lastMaintenanceByGear[gear.id].type }}</span>
+              <div v-if="lastMaintenanceByGear[gear.id].description" style="margin-top: 4px; color: #63705d;">
+                {{ lastMaintenanceByGear[gear.id].description }}
+              </div>
+            </div>
           </article>
         </div>
       </div>
@@ -145,7 +295,7 @@ function returnGear(record) {
           <option v-for="gear in gears.filter((item) => item.status === '可借')" :key="gear.id" :value="gear.id">{{ gear.name }}</option>
         </select>
         <select v-model="requestForm.borrower">
-          <option v-for="member in members" :key="member">{{ member }}</option>
+          <option v-for="member in members" :key="member.id">{{ member.nickname }}</option>
         </select>
         <div class="split">
           <input v-model="requestForm.start" type="date" />
@@ -182,6 +332,88 @@ function returnGear(record) {
       </div>
     </section>
 
+    <section v-if="tab === '保养记录'" class="layout">
+      <form class="panel" @submit.prevent="addMaintenance">
+        <h2>登记保养</h2>
+        <select v-model="maintenanceForm.gearId">
+          <option value="">选择装备</option>
+          <option v-for="gear in myGears" :key="gear.id" :value="gear.id">{{ gear.name }}</option>
+        </select>
+        <input v-model="maintenanceForm.date" type="date" />
+        <select v-model="maintenanceForm.type">
+          <option v-for="t in maintenanceTypes" :key="t">{{ t }}</option>
+        </select>
+        <input v-model="maintenanceForm.handler" placeholder="处理人（默认为当前成员）" />
+        <textarea v-model="maintenanceForm.description" placeholder="保养说明（清洁部位、维修内容、补充零件、检查结果等）"></textarea>
+        <button>保存记录</button>
+        <small v-if="myGears.length === 0" class="muted">当前成员名下暂无装备，无法登记保养记录。</small>
+      </form>
+
+      <div class="panel wide">
+        <div class="toolbar">
+          <h2>保养记录</h2>
+          <select v-model="maintenanceFilter">
+            <option v-for="opt in maintenanceGearOptions" :key="opt">{{ opt }}</option>
+          </select>
+        </div>
+        <div v-if="filteredMaintenance.length === 0" class="muted" style="padding: 20px; text-align: center;">暂无保养记录</div>
+        <div v-else class="requestList">
+          <article v-for="record in filteredMaintenance" :key="record.id">
+            <div>
+              <strong>{{ record.gearName }}</strong>
+              <span>{{ record.date }} · {{ record.type }} · 处理人 {{ record.handler }}</span>
+            </div>
+            <p>装备主人：{{ record.owner }}</p>
+            <p v-if="record.description" style="margin-top: 6px;">{{ record.description }}</p>
+            <div class="actions" v-if="record.owner === currentUser">
+              <button class="ghost small danger" @click="deleteMaintenance(record.id)">删除</button>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="tab === '成员资料'" class="layout">
+      <form class="panel" @submit.prevent="saveMember">
+        <h2>{{ editingMemberId ? '编辑成员' : '添加成员' }}</h2>
+        <input v-model="memberForm.nickname" placeholder="昵称" />
+        <input v-model="memberForm.phone" placeholder="联系电话" />
+        <input v-model="memberForm.area" placeholder="常用露营区域" />
+        <textarea v-model="memberForm.notes" placeholder="备注"></textarea>
+        <div class="split">
+          <button>{{ editingMemberId ? '保存修改' : '添加成员' }}</button>
+          <button v-if="editingMemberId" type="button" class="ghost" @click="cancelEditMember">取消</button>
+        </div>
+      </form>
+
+      <div class="panel wide">
+        <div class="toolbar">
+          <h2>成员列表</h2>
+          <span class="muted">共 {{ members.length }} 人</span>
+        </div>
+
+        <div v-if="deleteWarning" class="warning">
+          <span>{{ deleteWarning }}</span>
+          <button class="ghost small" @click="dismissWarning">关闭</button>
+        </div>
+
+        <div class="memberList">
+          <article v-for="member in members" :key="member.id" class="member-card">
+            <div class="member-info">
+              <strong>{{ member.nickname }}</strong>
+              <span v-if="member.phone">📞 {{ member.phone }}</span>
+              <span v-if="member.area">🏕 {{ member.area }}</span>
+              <small v-if="member.notes">{{ member.notes }}</small>
+            </div>
+            <div class="actions">
+              <button class="ghost small" @click="editMember(member)">编辑</button>
+              <button class="ghost small danger" @click="deleteMember(member)">删除</button>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <section v-if="tab === '我的借出' || tab === '我的借入'" class="panel">
       <h2>{{ tab }}</h2>
       <div class="requestList">
@@ -208,7 +440,7 @@ h2 { margin: 0; font-size: 18px; }
 .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .tabs button { background: #fff; color: #303427; border: 1px solid #d8dccf; }
 .tabs .active { background: #2f4a2c; color: #fff; }
-.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
 .metrics article, .panel, .cards article, .requestList article { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 18px; box-shadow: 0 10px 28px rgb(33 42 27 / .07); }
 .metrics strong { display: block; font-size: 28px; }
 .metrics span, article span, p, small { color: #63705d; }
@@ -218,13 +450,20 @@ input, select, textarea { width: 100%; border: 1px solid #cfd8ca; border-radius:
 textarea { min-height: 96px; resize: vertical; }
 button { border: 0; border-radius: 8px; padding: 11px 14px; background: #2f4a2c; color: #fff; cursor: pointer; }
 .ghost { background: #edf1e8; color: #2c3527; }
+.ghost.small { padding: 6px 12px; font-size: 13px; }
+.ghost.danger { color: #9b2c2c; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
 .toolbar select { max-width: 220px; }
+.muted { color: #63705d; font-size: 14px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
 article strong, article span { display: block; }
 article span { margin-top: 5px; }
-.requestList { display: grid; gap: 10px; }
+.requestList, .memberList { display: grid; gap: 10px; }
+.warning { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #92400e; font-size: 14px; }
+.member-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.member-info { flex: 1; }
+.member-info small { display: block; margin-top: 6px; }
 .actions { display: flex; gap: 8px; margin-top: 10px; }
-@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: start; } .metrics, .layout, .split { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: start; } .metrics, .layout, .split { grid-template-columns: 1fr; } .member-card { flex-direction: column; } }
 </style>
