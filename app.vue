@@ -106,6 +106,232 @@ function createDefaultTrips(gearList = gears.value, memberList = members.value) 
 
 const trips = ref(createDefaultTrips());
 
+const handoverFilter = ref('全部交接单');
+const handoverTypeFilter = ref('全部类型');
+const showHandoverModal = ref(false);
+const handoverModalMode = ref('');
+const currentHandoverId = ref(null);
+const handoverForm = ref({
+  type: '借出',
+  requestId: '',
+  gearId: '',
+  gearName: '',
+  owner: '',
+  borrower: '',
+  gearStatus: '',
+  deposit: '',
+  accessories: '',
+  handoverNotes: '',
+  damageRecord: '',
+  ownerConfirmed: false,
+  borrowerConfirmed: false
+});
+
+const handoverRecords = ref([]);
+
+function normalizeHandoverRecords(records, gearList = gears.value, requestList = requests.value) {
+  return records.map((record) => {
+    const gear = gearList.find((g) => g.id === record.gearId)
+      || gearList.find((g) => g.name === record.gearName && g.owner === record.owner);
+    const req = requestList.find((r) => r.id === record.requestId);
+    return {
+      id: record.id || crypto.randomUUID(),
+      type: record.type || '借出',
+      requestId: record.requestId || '',
+      gearId: gear ? gear.id : (record.gearId || ''),
+      gearName: gear ? gear.name : (record.gearName || '未知装备'),
+      owner: gear ? gear.owner : (record.owner || ''),
+      borrower: record.borrower || (req ? req.borrower : ''),
+      gearStatus: record.gearStatus || '',
+      deposit: record.deposit || (gear ? gear.deposit : ''),
+      accessories: record.accessories || '',
+      handoverNotes: record.handoverNotes || '',
+      damageRecord: record.damageRecord || '',
+      ownerConfirmed: !!record.ownerConfirmed,
+      borrowerConfirmed: !!record.borrowerConfirmed,
+      createdAt: record.createdAt || new Date().toISOString().slice(0, 10)
+    };
+  });
+}
+
+function createBorrowHandover(requestId) {
+  const req = requests.value.find((r) => r.id === requestId);
+  if (!req) return null;
+  const gear = gears.value.find((g) => g.id === req.gearId);
+  return {
+    id: crypto.randomUUID(),
+    type: '借出',
+    requestId: req.id,
+    gearId: req.gearId,
+    gearName: req.gearName,
+    owner: req.owner,
+    borrower: req.borrower,
+    gearStatus: gear ? (gear.notes || '') : '',
+    deposit: gear ? gear.deposit : '',
+    accessories: '',
+    handoverNotes: '',
+    damageRecord: '',
+    ownerConfirmed: false,
+    borrowerConfirmed: false,
+    createdAt: new Date().toISOString().slice(0, 10)
+  };
+}
+
+function createReturnHandover(requestId) {
+  const req = requests.value.find((r) => r.id === requestId);
+  if (!req) return null;
+  const borrowHandover = handoverRecords.value.find((h) => h.requestId === requestId && h.type === '借出');
+  const gear = gears.value.find((g) => g.id === req.gearId);
+  return {
+    id: crypto.randomUUID(),
+    type: '归还',
+    requestId: req.id,
+    gearId: req.gearId,
+    gearName: req.gearName,
+    owner: req.owner,
+    borrower: req.borrower,
+    gearStatus: borrowHandover ? borrowHandover.gearStatus : (gear ? gear.notes : ''),
+    deposit: borrowHandover ? borrowHandover.deposit : (gear ? gear.deposit : ''),
+    accessories: borrowHandover ? borrowHandover.accessories : '',
+    handoverNotes: '',
+    damageRecord: '',
+    ownerConfirmed: false,
+    borrowerConfirmed: false,
+    createdAt: new Date().toISOString().slice(0, 10)
+  };
+}
+
+function openBorrowHandoverModal(requestId) {
+  const existing = handoverRecords.value.find((h) => h.requestId === requestId && h.type === '借出');
+  if (existing) {
+    handoverForm.value = { ...existing };
+    currentHandoverId.value = existing.id;
+  } else {
+    const handover = createBorrowHandover(requestId);
+    if (!handover) return;
+    handoverForm.value = { ...handover };
+    currentHandoverId.value = null;
+  }
+  handoverModalMode.value = '借出';
+  showHandoverModal.value = true;
+}
+
+function openReturnHandoverModal(requestId) {
+  const existing = handoverRecords.value.find((h) => h.requestId === requestId && h.type === '归还');
+  if (existing) {
+    handoverForm.value = { ...existing };
+    currentHandoverId.value = existing.id;
+  } else {
+    const handover = createReturnHandover(requestId);
+    if (!handover) return;
+    handoverForm.value = { ...handover };
+    currentHandoverId.value = null;
+  }
+  handoverModalMode.value = '归还';
+  showHandoverModal.value = true;
+}
+
+function saveHandover() {
+  if (!handoverForm.value.gearId) return;
+  if (currentHandoverId.value) {
+    handoverRecords.value = handoverRecords.value.map((h) =>
+      h.id === currentHandoverId.value ? { ...handoverForm.value } : h
+    );
+  } else {
+    const newRecord = { ...handoverForm.value, id: crypto.randomUUID(), createdAt: new Date().toISOString().slice(0, 10) };
+    handoverRecords.value = [newRecord, ...handoverRecords.value];
+    currentHandoverId.value = newRecord.id;
+  }
+  checkHandoverCompletion(handoverForm.value.requestId);
+}
+
+function checkHandoverCompletion(requestId) {
+  const borrowHandover = handoverRecords.value.find((h) => h.requestId === requestId && h.type === '借出');
+  const returnHandover = handoverRecords.value.find((h) => h.requestId === requestId && h.type === '归还');
+
+  if (borrowHandover && borrowHandover.ownerConfirmed && borrowHandover.borrowerConfirmed) {
+    const req = requests.value.find((r) => r.id === requestId);
+    if (req && req.status === '已同意') {
+      gears.value = gears.value.map((gear) => gear.id === req.gearId ? { ...gear, status: '借出中' } : gear);
+    }
+  }
+
+  if (returnHandover && returnHandover.ownerConfirmed && returnHandover.borrowerConfirmed) {
+    const req = requests.value.find((r) => r.id === requestId);
+    if (req) {
+      requests.value = requests.value.map((item) =>
+        item.id === requestId
+          ? { ...item, status: '已归还', damage: returnHandover.damageRecord || '无' }
+          : item
+      );
+      gears.value = gears.value.map((gear) =>
+        gear.id === req.gearId
+          ? { ...gear, status: '可借', damage: returnHandover.damageRecord || '无' }
+          : gear
+      );
+    }
+  }
+}
+
+function toggleHandoverConfirm(role) {
+  if (role === 'owner') {
+    handoverForm.value.ownerConfirmed = !handoverForm.value.ownerConfirmed;
+  } else {
+    handoverForm.value.borrowerConfirmed = !handoverForm.value.borrowerConfirmed;
+  }
+}
+
+function closeHandoverModal() {
+  showHandoverModal.value = false;
+  handoverForm.value = {
+    type: '借出',
+    requestId: '',
+    gearId: '',
+    gearName: '',
+    owner: '',
+    borrower: '',
+    gearStatus: '',
+    deposit: '',
+    accessories: '',
+    handoverNotes: '',
+    damageRecord: '',
+    ownerConfirmed: false,
+    borrowerConfirmed: false
+  };
+  currentHandoverId.value = null;
+}
+
+const handoverStatusList = computed(() => ['全部交接单', '待确认', '已完成']);
+const handoverTypeList = computed(() => ['全部类型', '借出', '归还']);
+
+const filteredHandovers = computed(() => {
+  return handoverRecords.value.filter((h) => {
+    const typeMatch = handoverTypeFilter.value === '全部类型' || h.type === handoverTypeFilter.value;
+    const isCompleted = h.ownerConfirmed && h.borrowerConfirmed;
+    const statusMatch = handoverFilter.value === '全部交接单'
+      || (handoverFilter.value === '待确认' && !isCompleted)
+      || (handoverFilter.value === '已完成' && isCompleted);
+    return typeMatch && statusMatch;
+  });
+});
+
+const handoverCount = computed(() => handoverRecords.value.length);
+
+function getHandoverStatus(handover) {
+  if (handover.ownerConfirmed && handover.borrowerConfirmed) return '已完成';
+  if (handover.ownerConfirmed || handover.borrowerConfirmed) return '部分确认';
+  return '待确认';
+}
+
+function viewHandover(handoverId) {
+  const handover = handoverRecords.value.find((h) => h.id === handoverId);
+  if (!handover) return;
+  handoverForm.value = { ...handover };
+  currentHandoverId.value = handoverId;
+  handoverModalMode.value = handover.type;
+  showHandoverModal.value = true;
+}
+
 function normalizeTrips(storedTrips, gearList = gears.value, memberList = members.value) {
   const memberNames = memberList.map((m) => m.nickname);
   return storedTrips.map((trip) => ({
@@ -170,6 +396,7 @@ onMounted(() => {
   const storedRequests = localStorage.getItem('zfl-3-requests');
   const storedMaintenance = localStorage.getItem('zfl-3-maintenance');
   const storedTrips = localStorage.getItem('zfl-3-trips');
+  const storedHandovers = localStorage.getItem('zfl-3-handovers');
   if (storedMembers) members.value = JSON.parse(storedMembers);
   if (storedGears) gears.value = JSON.parse(storedGears);
   requests.value = storedRequests
@@ -181,6 +408,9 @@ onMounted(() => {
   trips.value = storedTrips
     ? normalizeTrips(JSON.parse(storedTrips), gears.value, members.value)
     : createDefaultTrips(gears.value, members.value);
+  handoverRecords.value = storedHandovers
+    ? normalizeHandoverRecords(JSON.parse(storedHandovers), gears.value, requests.value)
+    : [];
   if (trips.value.length > 0 && !selectedTripId.value) {
     selectedTripId.value = trips.value[0].id;
   }
@@ -191,6 +421,7 @@ watch(gears, (value) => localStorage.setItem('zfl-3-gears', JSON.stringify(value
 watch(requests, (value) => localStorage.setItem('zfl-3-requests', JSON.stringify(value)), { deep: true });
 watch(maintenanceRecords, (value) => localStorage.setItem('zfl-3-maintenance', JSON.stringify(value)), { deep: true });
 watch(trips, (value) => localStorage.setItem('zfl-3-trips', JSON.stringify(value)), { deep: true });
+watch(handoverRecords, (value) => localStorage.setItem('zfl-3-handovers', JSON.stringify(value)), { deep: true });
 
 const categories = computed(() => ['全部分类', ...new Set(gears.value.map((gear) => gear.category))]);
 const filteredGears = computed(() => gears.value.filter((gear) => category.value === '全部分类' || gear.category === category.value));
@@ -467,10 +698,17 @@ function updateRequest(id, status) {
   }
 }
 
-function returnGear(record) {
-  const damage = prompt('记录损耗情况，没有则填写无', '无');
-  requests.value = requests.value.map((item) => item.id === record.id ? { ...item, status: '已归还', damage: damage || '无' } : item);
-  gears.value = gears.value.map((gear) => gear.id === record.gearId ? { ...gear, status: '可借', damage: damage || '无' } : gear);
+function getBorrowHandover(requestId) {
+  return handoverRecords.value.find((h) => h.requestId === requestId && h.type === '借出');
+}
+
+function getReturnHandover(requestId) {
+  return handoverRecords.value.find((h) => h.requestId === requestId && h.type === '归还');
+}
+
+function isHandoverCompleted(requestId, type) {
+  const handover = handoverRecords.value.find((h) => h.requestId === requestId && h.type === type);
+  return handover && handover.ownerConfirmed && handover.borrowerConfirmed;
 }
 
 function saveMember() {
@@ -597,13 +835,14 @@ function deleteMaintenance(id) {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','申请列表','借用日历','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','申请列表','借用日历','交接确认单','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
       <article><strong>{{ gears.length }}</strong><span>登记装备</span></article>
       <article><strong>{{ gears.filter((item) => item.status === '可借').length }}</strong><span>当前可借</span></article>
       <article><strong>{{ requests.filter((item) => item.status === '待处理').length }}</strong><span>待处理申请</span></article>
+      <article><strong>{{ handoverCount }}</strong><span>交接记录</span></article>
       <article><strong>{{ maintenanceCount }}</strong><span>保养记录</span></article>
       <article><strong>{{ tripsCount }}</strong><span>出行计划</span></article>
       <article><strong>{{ members.length }}</strong><span>社群成员</span></article>
@@ -710,7 +949,18 @@ function deleteMaintenance(id) {
               <button @click="updateRequest(item.id, '已同意')">同意</button>
               <button class="ghost" @click="updateRequest(item.id, '已拒绝')">拒绝</button>
             </div>
-            <button v-if="item.status === '已同意'" class="ghost" @click="returnGear(item)">登记归还</button>
+            <div class="actions" v-if="item.status === '已同意' || item.status === '借出中'">
+              <button class="ghost small" @click="openBorrowHandoverModal(item.id)">
+                {{ isHandoverCompleted(item.id, '借出') ? '查看借出单' : '借出交接单' }}
+              </button>
+              <button v-if="isHandoverCompleted(item.id, '借出')" @click="openReturnHandoverModal(item.id)">
+                {{ getReturnHandover(item.id) ? (isHandoverCompleted(item.id, '归还') ? '查看归还单' : '继续归还') : '登记归还' }}
+              </button>
+            </div>
+            <div class="actions" v-if="item.status === '已归还'">
+              <button class="ghost small" @click="openBorrowHandoverModal(item.id)">借出交接单</button>
+              <button class="ghost small" @click="openReturnHandoverModal(item.id)">归还交接单</button>
+            </div>
           </article>
         </div>
       </div>
@@ -785,6 +1035,46 @@ function deleteMaintenance(id) {
         <span class="legend-item"><span class="legend-dot 待处理"></span>待处理</span>
         <span class="legend-item"><span class="legend-dot 已同意"></span>已同意</span>
         <span class="legend-item"><span class="legend-dot 借出中"></span>借出中</span>
+      </div>
+    </section>
+
+    <section v-if="tab === '交接确认单'" class="panel">
+      <div class="toolbar">
+        <h2>交接确认单</h2>
+        <div class="filter-group">
+          <select v-model="handoverTypeFilter">
+            <option v-for="opt in handoverTypeList" :key="opt">{{ opt }}</option>
+          </select>
+          <select v-model="handoverFilter">
+            <option v-for="opt in handoverStatusList" :key="opt">{{ opt }}</option>
+          </select>
+        </div>
+      </div>
+      <div v-if="filteredHandovers.length === 0" class="muted" style="padding: 40px; text-align: center;">暂无交接记录，可在申请列表中生成交接单</div>
+      <div v-else class="handover-list">
+        <article v-for="handover in filteredHandovers" :key="handover.id" class="handover-card" @click="viewHandover(handover.id)">
+          <div class="handover-header">
+            <strong>{{ handover.gearName }}</strong>
+            <span :class="['handover-type-badge', handover.type]">{{ handover.type }}</span>
+          </div>
+          <div class="handover-meta">
+            <span>出借人：{{ handover.owner }}</span>
+            <span>借用人：{{ handover.borrower }}</span>
+            <span>日期：{{ handover.createdAt }}</span>
+          </div>
+          <div class="handover-status-row">
+            <span :class="['status-badge', getHandoverStatus(handover)]">{{ getHandoverStatus(handover) }}</span>
+            <div class="confirm-states">
+              <span :class="['confirm-state', { confirmed: handover.ownerConfirmed }]">
+                {{ handover.ownerConfirmed ? '✓' : '○' }} 出借人
+              </span>
+              <span :class="['confirm-state', { confirmed: handover.borrowerConfirmed }]">
+                {{ handover.borrowerConfirmed ? '✓' : '○' }} 借用人
+              </span>
+            </div>
+          </div>
+          <p v-if="handover.damageRecord" class="damage-note">损耗：{{ handover.damageRecord }}</p>
+        </article>
       </div>
     </section>
 
@@ -1009,6 +1299,87 @@ function deleteMaintenance(id) {
         </article>
       </div>
     </section>
+
+    <div v-if="showHandoverModal" class="modal-overlay" @click.self="closeHandoverModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>{{ handoverModalMode }}交接确认单</h3>
+          <button class="ghost small" @click="closeHandoverModal">关闭</button>
+        </div>
+        <div class="modal-body">
+          <div class="handover-info">
+            <div class="info-row">
+              <span class="info-label">装备名称</span>
+              <span class="info-value">{{ handoverForm.gearName }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">出借人</span>
+              <span class="info-value">{{ handoverForm.owner }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">借用人</span>
+              <span class="info-value">{{ handoverForm.borrower }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">交接日期</span>
+              <span class="info-value">{{ handoverForm.createdAt || new Date().toISOString().slice(0, 10) }}</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>装备状态</label>
+            <textarea v-model="handoverForm.gearStatus" placeholder="描述装备当前状态，如：完好、有轻微划痕等"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>押金（元）</label>
+            <input v-model="handoverForm.deposit" placeholder="押金金额" />
+          </div>
+
+          <div class="form-group">
+            <label>配件清单</label>
+            <textarea v-model="handoverForm.accessories" placeholder="列出随装备交接的配件，如：地钉、防潮垫、收纳袋等"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>交接备注</label>
+            <textarea v-model="handoverForm.handoverNotes" placeholder="其他需要说明的事项"></textarea>
+          </div>
+
+          <div v-if="handoverModalMode === '归还'" class="form-group">
+            <label>损耗记录</label>
+            <textarea v-model="handoverForm.damageRecord" placeholder="记录归还时的损耗情况，没有则填写无"></textarea>
+          </div>
+
+          <div class="confirm-section">
+            <h4>双方确认</h4>
+            <div class="confirm-buttons">
+              <button
+                :class="['confirm-btn', { confirmed: handoverForm.ownerConfirmed }]"
+                @click="toggleHandoverConfirm('owner')"
+                type="button"
+              >
+                {{ handoverForm.ownerConfirmed ? '✓ 已确认' : '出借人确认' }}
+              </button>
+              <button
+                :class="['confirm-btn', { confirmed: handoverForm.borrowerConfirmed }]"
+                @click="toggleHandoverConfirm('borrower')"
+                type="button"
+              >
+                {{ handoverForm.borrowerConfirmed ? '✓ 已确认' : '借用人确认' }}
+              </button>
+            </div>
+            <p v-if="handoverForm.ownerConfirmed && handoverForm.borrowerConfirmed" class="confirm-success">
+              双方已确认，交接完成！
+            </p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="ghost" @click="closeHandoverModal">取消</button>
+          <button @click="saveHandover">保存交接单</button>
+        </div>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -1025,7 +1396,7 @@ h2 { margin: 0; font-size: 18px; }
 .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .tabs button { background: #fff; color: #303427; border: 1px solid #d8dccf; }
 .tabs .active { background: #2f4a2c; color: #fff; }
-.metrics { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px; }
+.metrics { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; margin-bottom: 16px; }
 .metrics article, .panel, .cards article, .requestList article { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 18px; box-shadow: 0 10px 28px rgb(33 42 27 / .07); }
 .metrics strong { display: block; font-size: 28px; }
 .metrics span, article span, p, small { color: #63705d; }
@@ -1152,10 +1523,62 @@ article span { margin-top: 5px; }
 .legend-dot.已同意 { background: #f0fdf4; border: 2px solid #22c55e; }
 .legend-dot.借出中 { background: #eff6ff; border: 2px solid #3b82f6; }
 
-@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: start; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; }
+.filter-group { display: flex; gap: 8px; }
+.filter-group select { max-width: 150px; }
+
+.handover-list { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.handover-card { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 16px; cursor: pointer; transition: all 0.2s; }
+.handover-card:hover { border-color: #2f4a2c; box-shadow: 0 4px 12px rgba(47, 74, 44, 0.1); }
+.handover-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.handover-header strong { font-size: 16px; }
+.handover-type-badge { padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+.handover-type-badge.借出 { background: #dbeafe; color: #1e40af; }
+.handover-type-badge.归还 { background: #dcfce7; color: #166534; }
+.handover-meta { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.handover-meta span { font-size: 13px; color: #63705d; margin: 0; }
+.handover-status-row { display: flex; justify-content: space-between; align-items: center; }
+.status-badge { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+.status-badge.待确认 { background: #fef3c7; color: #92400e; }
+.status-badge.部分确认 { background: #dbeafe; color: #1e40af; }
+.status-badge.已完成 { background: #dcfce7; color: #166534; }
+.confirm-states { display: flex; gap: 12px; }
+.confirm-state { font-size: 12px; color: #9ca3af; }
+.confirm-state.confirmed { color: #166534; font-weight: 600; }
+.damage-note { margin-top: 10px; padding: 8px 12px; background: #fef2f2; border-radius: 6px; font-size: 13px; color: #991b1b; }
+
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+.modal-content { background: #fff; border-radius: 12px; width: 100%; max-width: 560px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 22px; border-bottom: 1px solid #e5e7db; }
+.modal-header h3 { margin: 0; font-size: 18px; }
+.modal-body { flex: 1; overflow-y: auto; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px; }
+.modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 22px; border-top: 1px solid #e5e7db; }
+
+.handover-info { background: #f6f8f2; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.info-row { display: flex; justify-content: space-between; gap: 12px; }
+.info-label { color: #63705d; font-size: 13px; }
+.info-value { font-weight: 500; color: #22251f; }
+
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group label { font-size: 13px; color: #63705d; font-weight: 500; }
+
+.confirm-section { background: #f9faf7; border: 1px dashed #cfd8ca; border-radius: 8px; padding: 16px; }
+.confirm-section h4 { margin: 0 0 12px; font-size: 15px; color: #2f4a2c; }
+.confirm-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.confirm-btn { padding: 12px; border-radius: 8px; border: 2px solid #cfd8ca; background: #fff; color: #63705d; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.confirm-btn:hover { border-color: #2f4a2c; color: #2f4a2c; }
+.confirm-btn.confirmed { background: #dcfce7; border-color: #22c55e; color: #166534; }
+.confirm-success { margin: 12px 0 0; text-align: center; color: #166534; font-weight: 600; font-size: 14px; }
+
+@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: stretch; gap: 10px; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; }
   .calendar-toolbar { flex-direction: column; align-items: stretch; }
   .calendar-title-group { justify-content: space-between; }
   .calendar-header-row, .calendar-data-row { grid-template-columns: 120px repeat(7, 1fr); overflow-x: auto; min-width: 700px; }
   .calendar-grid { overflow-x: auto; }
+  .handover-list { grid-template-columns: 1fr; }
+  .filter-group { flex-direction: row; flex-wrap: wrap; }
+  .filter-group select { max-width: none; flex: 1; min-width: 120px; }
+  .modal-overlay { padding: 0; }
+  .modal-content { max-height: 100vh; border-radius: 0; }
+  .confirm-buttons { grid-template-columns: 1fr; }
 }
 </style>
