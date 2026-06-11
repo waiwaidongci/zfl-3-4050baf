@@ -956,7 +956,7 @@ function applyGear() {
     alert('归还日期不能早于借用日期');
     return;
   }
-  const conflicts = findConflictingRequests(gear.id, requestForm.value.start, requestForm.value.end);
+  const conflicts = findConflictingRequests(gear.id, requestForm.value.start, requestForm.value.end, editingDraftId.value);
   if (conflicts.length > 0) {
     conflictDetails.value = conflicts;
     conflictWarning.value = `该装备在所选日期范围内存在 ${conflicts.length} 条冲突记录，请调整日期后再提交。`;
@@ -964,7 +964,41 @@ function applyGear() {
   }
   conflictWarning.value = '';
   conflictDetails.value = [];
-  requests.value = [{ id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理', damage: '', ...requestForm.value }, ...requests.value];
+
+  if (editingDraftId.value) {
+    requests.value = requests.value.map((item) =>
+      item.id === editingDraftId.value
+        ? { ...item, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner }
+        : item
+    );
+    editingDraftId.value = null;
+    alert('草稿已更新');
+  } else {
+    requests.value = [{ id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理', damage: '', ...requestForm.value }, ...requests.value];
+  }
+  requestForm.value = { gearId: '', borrower: currentUser.value, start: iso(2), end: iso(4), reason: '' };
+}
+
+function saveDraft() {
+  const gear = gears.value.find((item) => item.id === requestForm.value.gearId);
+  if (!gear || !requestForm.value.borrower) return;
+  if (editingDraftId.value) {
+    requests.value = requests.value.map((item) =>
+      item.id === editingDraftId.value
+        ? { ...item, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner }
+        : item
+    );
+    editingDraftId.value = null;
+    alert('草稿已更新');
+  } else {
+    requests.value = [{ id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '草稿', damage: '', ...requestForm.value }, ...requests.value];
+    alert('草稿已保存');
+  }
+  requestForm.value = { gearId: '', borrower: currentUser.value, start: iso(2), end: iso(4), reason: '' };
+}
+
+function cancelEditDraft() {
+  editingDraftId.value = null;
   requestForm.value = { gearId: '', borrower: currentUser.value, start: iso(2), end: iso(4), reason: '' };
 }
 
@@ -985,6 +1019,56 @@ function updateRequest(id, status) {
         depositRecords.value = [newDeposit, ...depositRecords.value];
       }
     }
+  }
+}
+
+function submitDraft(id) {
+  const record = requests.value.find((item) => item.id === id);
+  if (!record) return;
+  const gear = gears.value.find((g) => g.id === record.gearId);
+  if (!gear || gear.status !== '可借') {
+    alert('该装备当前不可借，无法提交申请');
+    return;
+  }
+  if (!record.start || !record.end) {
+    alert('请先编辑草稿，补充借用起止日期');
+    return;
+  }
+  if (new Date(record.end) < new Date(record.start)) {
+    alert('归还日期不能早于借用日期');
+    return;
+  }
+  const conflicts = findConflictingRequests(gear.id, record.start, record.end, id);
+  if (conflicts.length > 0) {
+    alert(`该装备在所选日期范围内存在 ${conflicts.length} 条冲突记录，请调整日期后再提交。`);
+    return;
+  }
+  updateRequest(id, '待处理');
+}
+
+const editingDraftId = ref(null);
+function editDraft(id) {
+  const record = requests.value.find((item) => item.id === id);
+  if (!record) return;
+  editingDraftId.value = id;
+  requestForm.value = {
+    gearId: record.gearId,
+    borrower: record.borrower,
+    start: record.start,
+    end: record.end,
+    reason: record.reason
+  };
+  tab.value = '申请列表';
+}
+
+function deleteRequest(id) {
+  const record = requests.value.find((item) => item.id === id);
+  if (!record) return;
+  if (!confirm(`确定删除${record.status === '草稿' ? '草稿' : '申请'}「${record.gearName}」吗？`)) return;
+  requests.value = requests.value.filter((item) => item.id !== id);
+  if (editingDraftId.value === id) {
+    editingDraftId.value = null;
+    requestForm.value = { gearId: '', borrower: currentUser.value, start: iso(2), end: iso(4), reason: '' };
   }
 }
 
@@ -1248,7 +1332,7 @@ function addRecommendationToRequests() {
       borrower: recommendBorrower.value,
       start: recommendStart.value,
       end: recommendEnd.value,
-      status: '待处理',
+      status: '草稿',
       damage: '',
       reason: `${recommendScene.value}·${recommendPeople.value}人·${recommendDays.value}天 套装推荐`
     }, ...requests.value];
@@ -1256,7 +1340,7 @@ function addRecommendationToRequests() {
   }
 
   if (addedCount > 0) {
-    alert(`已成功添加 ${addedCount} 条借用申请草稿`);
+    alert(`已成功保存 ${addedCount} 条借用申请草稿，请前往申请列表提交`);
     tab.value = '申请列表';
   } else {
     alert('没有可添加的装备');
@@ -1438,7 +1522,7 @@ watch(currentUser, (newVal) => {
 
     <section v-if="tab === '申请列表'" class="layout">
       <form class="panel" @submit.prevent="applyGear">
-        <h2>发起借用</h2>
+        <h2>{{ editingDraftId ? '编辑草稿' : '发起借用' }}</h2>
         <select v-model="requestForm.gearId">
           <option value="">选择装备</option>
           <option v-for="gear in gears.filter((item) => item.status === '可借')" :key="gear.id" :value="gear.id">{{ gear.name }}</option>
@@ -1451,7 +1535,11 @@ watch(currentUser, (newVal) => {
           <input v-model="requestForm.end" type="date" />
         </div>
         <textarea v-model="requestForm.reason" placeholder="借用说明"></textarea>
-        <button>提交申请</button>
+        <div class="split">
+          <button>{{ editingDraftId ? '保存并提交' : '提交申请' }}</button>
+          <button type="button" class="ghost" @click.prevent="saveDraft">保存草稿</button>
+        </div>
+        <button v-if="editingDraftId" type="button" class="ghost" @click="cancelEditDraft">取消编辑</button>
 
         <div v-if="conflictWarning" class="conflict-warning">
           <div class="conflict-header">
@@ -1473,6 +1561,7 @@ watch(currentUser, (newVal) => {
           <h2>申请流转</h2>
           <select v-model="requestFilter">
             <option>全部申请</option>
+            <option>草稿</option>
             <option>待处理</option>
             <option>已同意</option>
             <option>已拒绝</option>
@@ -1480,12 +1569,20 @@ watch(currentUser, (newVal) => {
           </select>
         </div>
         <div class="requestList">
-          <article v-for="item in requestList" :key="item.id">
+          <article v-for="item in requestList" :key="item.id" :class="item.status === '草稿' ? 'draft-card' : ''">
             <div>
               <strong>{{ item.gearName }}</strong>
               <span>{{ item.borrower }}申请 · {{ item.start }}至{{ item.end }}</span>
             </div>
-            <p>{{ item.status }} · 装备主人{{ item.owner }} · {{ item.reason }}</p>
+            <p>
+              <span :class="['status-tag', item.status]">{{ item.status }}</span>
+               · 装备主人{{ item.owner }} · {{ item.reason }}
+            </p>
+            <div class="actions" v-if="item.status === '草稿'">
+              <button @click="submitDraft(item.id)">提交申请</button>
+              <button class="ghost small" @click="editDraft(item.id)">编辑</button>
+              <button class="ghost small danger" @click="deleteRequest(item.id)">删除</button>
+            </div>
             <div class="actions" v-if="item.status === '待处理'">
               <button @click="updateRequest(item.id, '已同意')">同意</button>
               <button class="ghost" @click="updateRequest(item.id, '已拒绝')">拒绝</button>
@@ -2168,7 +2265,20 @@ article span { margin-top: 5px; }
 .conflict-status.待处理 { background: #fef3c7; color: #92400e; }
 .conflict-status.已同意 { background: #dcfce7; color: #166534; }
 .conflict-status.借出中 { background: #dbeafe; color: #1e40af; }
+.conflict-status.草稿 { background: #fef3c7; color: #92400e; }
 .conflict-reason { font-size: 13px; color: #4b5563; margin-top: 5px; }
+
+.status-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-right: 4px; }
+.status-tag.草稿 { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+.status-tag.待处理 { background: #fef9c3; color: #854d0e; }
+.status-tag.已同意 { background: #dcfce7; color: #166534; }
+.status-tag.已拒绝 { background: #fee2e2; color: #991b1b; }
+.status-tag.借出中 { background: #dbeafe; color: #1e40af; }
+.status-tag.已归还 { background: #e5e7eb; color: #374151; }
+
+.requestList article.draft-card { background: #fffbeb; border-left: 4px solid #f59e0b; }
+
+
 
 .calendar-panel { padding: 22px; }
 .calendar-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
