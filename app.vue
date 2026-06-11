@@ -968,11 +968,11 @@ function applyGear() {
   if (editingDraftId.value) {
     requests.value = requests.value.map((item) =>
       item.id === editingDraftId.value
-        ? { ...item, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner }
+        ? { ...item, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理' }
         : item
     );
     editingDraftId.value = null;
-    alert('草稿已更新');
+    alert('草稿已提交');
   } else {
     requests.value = [{ id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理', damage: '', ...requestForm.value }, ...requests.value];
   }
