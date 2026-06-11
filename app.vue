@@ -37,6 +37,12 @@ const selectedTripId = ref(null);
 const tripGears = ref([]);
 const tripCategoryFilter = ref('全部分类');
 
+const calendarViewMode = ref('按装备');
+const calendarFilterValue = ref('全部');
+const calendarWeekStart = ref(iso(0));
+const conflictWarning = ref('');
+const conflictDetails = ref([]);
+
 const gears = ref([
   { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: '阿岚', available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
   { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: '梁序', available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '' },
@@ -120,6 +126,44 @@ function normalizeTrips(storedTrips, gearList = gears.value, memberList = member
   }));
 }
 
+function normalizeRequests(storedRequests, gearList = gears.value) {
+  const today = new Date();
+  const iso = (offset = 0) => {
+    const date = new Date(today);
+    date.setDate(date.getDate() + offset);
+    return date.toISOString().slice(0, 10);
+  };
+  return storedRequests.map((req) => {
+    const gear = gearList.find((g) => g.id === req.gearId)
+      || gearList.find((g) => g.name === req.gearName && g.owner === req.owner);
+    return {
+      id: req.id || crypto.randomUUID(),
+      gearId: gear ? gear.id : (req.gearId || ''),
+      gearName: gear ? gear.name : (req.gearName || '未知装备'),
+      owner: gear ? gear.owner : (req.owner || ''),
+      borrower: req.borrower || '未知成员',
+      start: req.start || iso(0),
+      end: req.end || req.start || iso(0),
+      status: req.status || '待处理',
+      reason: req.reason || '',
+      damage: req.damage || ''
+    };
+  });
+}
+
+function findConflictingRequests(gearId, startDate, endDate, excludeId = null) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  return requests.value.filter((req) => {
+    if (excludeId && req.id === excludeId) return false;
+    if (req.gearId !== gearId) return false;
+    if (req.status !== '待处理' && req.status !== '已同意') return false;
+    const reqStart = new Date(req.start);
+    const reqEnd = new Date(req.end);
+    return start <= reqEnd && end >= reqStart;
+  });
+}
+
 onMounted(() => {
   const storedMembers = localStorage.getItem('zfl-3-members');
   const storedGears = localStorage.getItem('zfl-3-gears');
@@ -128,7 +172,9 @@ onMounted(() => {
   const storedTrips = localStorage.getItem('zfl-3-trips');
   if (storedMembers) members.value = JSON.parse(storedMembers);
   if (storedGears) gears.value = JSON.parse(storedGears);
-  if (storedRequests) requests.value = JSON.parse(storedRequests);
+  requests.value = storedRequests
+    ? normalizeRequests(JSON.parse(storedRequests), gears.value)
+    : requests.value;
   maintenanceRecords.value = storedMaintenance
     ? normalizeMaintenanceRecords(JSON.parse(storedMaintenance), gears.value)
     : createDefaultMaintenanceRecords(gears.value);
@@ -180,6 +226,59 @@ const tripCategories = computed(() => ['全部分类', ...new Set(gears.value.ma
 const tripFilteredGears = computed(() => gears.value.filter((gear) => tripCategoryFilter.value === '全部分类' || gear.category === tripCategoryFilter.value));
 const upcomingTrips = computed(() => trips.value.filter((t) => new Date(t.startDate) >= new Date(iso(0))));
 const tripsCount = computed(() => trips.value.length);
+
+const weekDates = computed(() => {
+  const dates = [];
+  const start = new Date(calendarWeekStart.value);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+  return dates;
+});
+const calendarGearOptions = computed(() => ['全部', ...new Set(requests.value.map((r) => r.gearName).filter(Boolean))]);
+const calendarMemberOptions = computed(() => ['全部', ...members.value.map((m) => m.nickname)]);
+const calendarRows = computed(() => {
+  if (calendarViewMode.value === '按装备') {
+    const gearNames = calendarFilterValue.value === '全部'
+      ? [...new Set(requests.value.map((r) => r.gearName).filter(Boolean))]
+      : [calendarFilterValue.value];
+    return gearNames.map((name) => ({
+      key: name,
+      label: name,
+      type: 'gear'
+    }));
+  } else {
+    const memberNames = calendarFilterValue.value === '全部'
+      ? members.value.map((m) => m.nickname)
+      : [calendarFilterValue.value];
+    return memberNames.map((name) => ({
+      key: name,
+      label: name,
+      type: 'member'
+    }));
+  }
+});
+function getRequestsForCell(rowKey, rowType, dateStr) {
+  const date = new Date(dateStr);
+  return requests.value.filter((req) => {
+    if (req.status === '已拒绝' || req.status === '已归还') return false;
+    if (rowType === 'gear' && req.gearName !== rowKey) return false;
+    if (rowType === 'member' && req.borrower !== rowKey) return false;
+    const reqStart = new Date(req.start);
+    const reqEnd = new Date(req.end);
+    return date >= reqStart && date <= reqEnd;
+  });
+}
+function shiftWeek(offset) {
+  const d = new Date(calendarWeekStart.value);
+  d.setDate(d.getDate() + offset * 7);
+  calendarWeekStart.value = d.toISOString().slice(0, 10);
+}
+function resetWeekToToday() {
+  calendarWeekStart.value = iso(0);
+}
 
 function isGearAvailable(gearId) {
   const gear = gears.value.find((g) => g.id === gearId);
@@ -318,8 +417,29 @@ function addGear() {
 function applyGear() {
   const gear = gears.value.find((item) => item.id === requestForm.value.gearId);
   if (!gear || !requestForm.value.borrower) return;
+  if (!requestForm.value.start || !requestForm.value.end) {
+    alert('请选择借用起止日期');
+    return;
+  }
+  if (new Date(requestForm.value.end) < new Date(requestForm.value.start)) {
+    alert('归还日期不能早于借用日期');
+    return;
+  }
+  const conflicts = findConflictingRequests(gear.id, requestForm.value.start, requestForm.value.end);
+  if (conflicts.length > 0) {
+    conflictDetails.value = conflicts;
+    conflictWarning.value = `该装备在所选日期范围内存在 ${conflicts.length} 条冲突记录，请调整日期后再提交。`;
+    return;
+  }
+  conflictWarning.value = '';
+  conflictDetails.value = [];
   requests.value = [{ id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理', damage: '', ...requestForm.value }, ...requests.value];
   requestForm.value = { gearId: '', borrower: currentUser.value, start: iso(2), end: iso(4), reason: '' };
+}
+
+function dismissConflictWarning() {
+  conflictWarning.value = '';
+  conflictDetails.value = [];
 }
 
 function updateRequest(id, status) {
@@ -460,7 +580,7 @@ function deleteMaintenance(id) {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','申请列表','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','申请列表','借用日历','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -535,6 +655,21 @@ function deleteMaintenance(id) {
         </div>
         <textarea v-model="requestForm.reason" placeholder="借用说明"></textarea>
         <button>提交申请</button>
+
+        <div v-if="conflictWarning" class="conflict-warning">
+          <div class="conflict-header">
+            <strong>⚠️ {{ conflictWarning }}</strong>
+            <button type="button" class="ghost small" @click="dismissConflictWarning">关闭</button>
+          </div>
+          <div class="conflict-list">
+            <div v-for="c in conflictDetails" :key="c.id" class="conflict-item">
+              <div><strong>{{ c.gearName }}</strong></div>
+              <div class="conflict-meta">借用人：{{ c.borrower }} · {{ c.start }} 至 {{ c.end }}</div>
+              <div class="conflict-status" :class="c.status">{{ c.status }}</div>
+              <div v-if="c.reason" class="conflict-reason">{{ c.reason }}</div>
+            </div>
+          </div>
+        </div>
       </form>
       <div class="panel wide">
         <div class="toolbar">
@@ -561,6 +696,73 @@ function deleteMaintenance(id) {
             <button v-if="item.status === '已同意'" class="ghost" @click="returnGear(item)">登记归还</button>
           </article>
         </div>
+      </div>
+    </section>
+
+    <section v-if="tab === '借用日历'" class="panel calendar-panel">
+      <div class="calendar-toolbar">
+        <div class="calendar-title-group">
+          <h2>借用日历</h2>
+          <div class="week-nav">
+            <button class="ghost small" @click="shiftWeek(-1)">← 上周</button>
+            <button class="ghost small" @click="resetWeekToToday">本周</button>
+            <button class="ghost small" @click="shiftWeek(1)">下周 →</button>
+          </div>
+        </div>
+        <div class="calendar-filters">
+          <label>
+            查看方式
+            <select v-model="calendarViewMode" @change="calendarFilterValue = '全部'">
+              <option>按装备</option>
+              <option>按成员</option>
+            </select>
+          </label>
+          <label>
+            {{ calendarViewMode === '按装备' ? '装备筛选' : '成员筛选' }}
+            <select v-model="calendarFilterValue">
+              <option v-for="opt in (calendarViewMode === '按装备' ? calendarGearOptions : calendarMemberOptions)" :key="opt">{{ opt }}</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div v-if="calendarRows.length === 0" class="calendar-empty muted" style="padding: 40px; text-align: center;">
+        当前筛选条件下暂无借用记录
+      </div>
+
+      <div v-else class="calendar-grid">
+        <div class="calendar-header-row">
+          <div class="calendar-corner">{{ calendarViewMode === '按装备' ? '装备 / 日期' : '成员 / 日期' }}</div>
+          <div v-for="date in weekDates" :key="date" :class="['calendar-date-header', { today: date === iso(0) }]">
+            <div class="date-label">{{ date.slice(5) }}</div>
+            <div class="weekday-label">{{ ['周日','周一','周二','周三','周四','周五','周六'][new Date(date).getDay()] }}</div>
+          </div>
+        </div>
+
+        <div v-for="row in calendarRows" :key="row.key" class="calendar-data-row">
+          <div class="calendar-row-label">
+            <strong>{{ row.label }}</strong>
+          </div>
+          <div v-for="date in weekDates" :key="date" :class="['calendar-cell', { today: date === iso(0) }]">
+            <div class="cell-requests">
+              <div
+                v-for="req in getRequestsForCell(row.key, row.type, date)"
+                :key="req.id"
+                :class="['cal-request', req.status]"
+                :title="`${req.gearName} | ${req.borrower}借 | ${req.start}~${req.end} | ${req.status}`"
+              >
+                <div class="cal-req-name">{{ row.type === 'gear' ? req.borrower : req.gearName }}</div>
+                <div class="cal-req-status">{{ req.status }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="calendar-legend">
+        <span class="legend-item"><span class="legend-dot 待处理"></span>待处理</span>
+        <span class="legend-item"><span class="legend-dot 已同意"></span>已同意</span>
+        <span class="legend-item"><span class="legend-dot 借出中"></span>借出中</span>
       </div>
     </section>
 
@@ -877,5 +1079,61 @@ article span { margin-top: 5px; }
 .availability-badge.unavailable { background: #fee2e2; color: #991b1b; }
 .gear-list-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
-@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: start; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; } }
+.conflict-warning { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 12px; margin-top: 8px; }
+.conflict-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; color: #991b1b; margin-bottom: 10px; }
+.conflict-list { display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; }
+.conflict-item { background: #fff; border: 1px solid #fecaca; border-radius: 6px; padding: 10px; }
+.conflict-meta { font-size: 13px; color: #6b7280; margin-top: 3px; }
+.conflict-status { display: inline-block; margin-top: 5px; font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.conflict-status.待处理 { background: #fef3c7; color: #92400e; }
+.conflict-status.已同意 { background: #dcfce7; color: #166534; }
+.conflict-status.借出中 { background: #dbeafe; color: #1e40af; }
+.conflict-reason { font-size: 13px; color: #4b5563; margin-top: 5px; }
+
+.calendar-panel { padding: 22px; }
+.calendar-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.calendar-title-group { display: flex; align-items: center; gap: 16px; }
+.week-nav { display: flex; gap: 6px; }
+.calendar-filters { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; }
+.calendar-filters label { display: grid; gap: 6px; min-width: 160px; font-size: 13px; color: #63705d; }
+.calendar-filters select { margin: 0; }
+
+.calendar-grid { border: 1px solid #e5e7db; border-radius: 8px; overflow: hidden; }
+.calendar-header-row, .calendar-data-row { display: grid; grid-template-columns: 180px repeat(7, 1fr); }
+.calendar-header-row { background: #2f4a2c; color: #fff; }
+.calendar-corner { padding: 14px 12px; font-weight: 600; border-right: 1px solid #3f5a3c; background: #263e23; }
+.calendar-date-header { padding: 10px 8px; text-align: center; border-right: 1px solid #3f5a3c; }
+.calendar-date-header:last-child { border-right: 0; }
+.calendar-date-header.today { background: #4a6b47; }
+.date-label { font-size: 15px; font-weight: 600; }
+.weekday-label { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+
+.calendar-data-row { border-top: 1px solid #e5e7db; min-height: 90px; }
+.calendar-data-row:nth-child(even) .calendar-cell,
+.calendar-data-row:nth-child(even) .calendar-row-label { background: #fafbf7; }
+.calendar-row-label { padding: 12px 10px; border-right: 1px solid #e5e7db; display: flex; align-items: flex-start; }
+.calendar-cell { padding: 6px; border-right: 1px solid #e5e7db; min-height: 90px; position: relative; }
+.calendar-cell:last-child { border-right: 0; }
+.calendar-cell.today { background: #fffbeb !important; }
+.cell-requests { display: flex; flex-direction: column; gap: 4px; }
+.cal-request { border-radius: 5px; padding: 5px 7px; font-size: 12px; cursor: pointer; border-left: 3px solid; }
+.cal-request.待处理 { background: #fffbeb; border-left-color: #f59e0b; color: #92400e; }
+.cal-request.已同意 { background: #f0fdf4; border-left-color: #22c55e; color: #166534; }
+.cal-request.借出中 { background: #eff6ff; border-left-color: #3b82f6; color: #1e40af; }
+.cal-req-name { font-weight: 600; line-height: 1.3; }
+.cal-req-status { font-size: 11px; opacity: 0.8; margin-top: 1px; }
+
+.calendar-legend { display: flex; gap: 20px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7db; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #63705d; }
+.legend-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend-dot.待处理 { background: #fffbeb; border: 2px solid #f59e0b; }
+.legend-dot.已同意 { background: #f0fdf4; border: 2px solid #22c55e; }
+.legend-dot.借出中 { background: #eff6ff; border: 2px solid #3b82f6; }
+
+@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: start; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; }
+  .calendar-toolbar { flex-direction: column; align-items: stretch; }
+  .calendar-title-group { justify-content: space-between; }
+  .calendar-header-row, .calendar-data-row { grid-template-columns: 120px repeat(7, 1fr); overflow-x: auto; min-width: 700px; }
+  .calendar-grid { overflow-x: auto; }
+}
 </style>
