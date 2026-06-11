@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
+import DataImportExport from './components/DataImportExport.vue';
 
 const today = new Date();
 const iso = (offset = 0) => {
@@ -8,14 +9,627 @@ const iso = (offset = 0) => {
   return date.toISOString().slice(0, 10);
 };
 
-const defaultMembers = [
-  { id: crypto.randomUUID(), nickname: '阿岚', phone: '', area: '', notes: '' },
-  { id: crypto.randomUUID(), nickname: '梁序', phone: '', area: '', notes: '' },
-  { id: crypto.randomUUID(), nickname: '小北', phone: '', area: '', notes: '' },
-  { id: crypto.randomUUID(), nickname: '陈默', phone: '', area: '', notes: '' }
+const SPACE_LIST_KEY = 'zfl-3-spaces';
+const CURRENT_SPACE_KEY = 'zfl-3-current-space';
+const SPACE_DATA_PREFIX = 'zfl-3-space-';
+
+const OLD_KEYS = [
+  'zfl-3-members',
+  'zfl-3-gears',
+  'zfl-3-requests',
+  'zfl-3-maintenance',
+  'zfl-3-trips',
+  'zfl-3-handovers',
+  'zfl-3-deposits'
 ];
 
-const members = ref(defaultMembers);
+const spaces = ref([]);
+const currentSpaceId = ref(null);
+const spaceData = ref({});
+const migrationWarning = ref('');
+const dataErrorWarning = ref('');
+const showSpaceModal = ref(false);
+const spaceModalMode = ref('create');
+const editingSpaceId = ref(null);
+const spaceForm = ref({ name: '', description: '' });
+const showSpaceMenu = ref(false);
+
+function createDefaultMembers() {
+  return [
+    { id: crypto.randomUUID(), nickname: '阿岚', phone: '', area: '', notes: '' },
+    { id: crypto.randomUUID(), nickname: '梁序', phone: '', area: '', notes: '' },
+    { id: crypto.randomUUID(), nickname: '小北', phone: '', area: '', notes: '' },
+    { id: crypto.randomUUID(), nickname: '陈默', phone: '', area: '', notes: '' }
+  ];
+}
+
+function createDefaultGears(ownerName = '阿岚', stoveOwner = '梁序', lampOwner = '小北') {
+  return [
+    { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: ownerName, available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
+    { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: stoveOwner, available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '' },
+    { id: crypto.randomUUID(), name: '营地灯三件组', category: '照明', owner: lampOwner, available: iso(3), deposit: '50', status: '可借', notes: '满电交接', damage: '' }
+  ];
+}
+
+function createDefaultRequests(gearList) {
+  if (gearList.length < 3) return [];
+  return [
+    { id: crypto.randomUUID(), gearId: gearList[1].id, gearName: '炉头套装', owner: gearList[1].owner, borrower: '阿岚', start: iso(-1), end: iso(2), status: '已同意', reason: '周末湖边露营', damage: '' },
+    { id: crypto.randomUUID(), gearId: gearList[2].id, gearName: '营地灯三件组', owner: gearList[2].owner, borrower: '陈默', start: iso(3), end: iso(5), status: '待处理', reason: '夜钓备用', damage: '' }
+  ];
+}
+
+function findGearForMaintenance(record, gearList) {
+  return gearList.find((gear) => gear.id === record.gearId)
+    || gearList.find((gear) => gear.name === record.gearName && gear.owner === record.owner);
+}
+
+function normalizeMaintenanceRecords(records, gearList) {
+  if (!Array.isArray(records)) return [];
+  return records
+    .map((record) => {
+      if (!record || typeof record !== 'object') return null;
+      const gear = findGearForMaintenance(record, gearList);
+      return gear ? { ...record, gearId: gear.id, gearName: gear.name, owner: gear.owner } : null;
+    })
+    .filter(Boolean);
+}
+
+function createDefaultMaintenanceRecords(gearList) {
+  const findGear = (name, owner) => gearList.find((gear) => gear.name === name && gear.owner === owner);
+  const tent = findGear('双人轻量帐', '阿岚');
+  const stove = findGear('炉头套装', '梁序');
+  return [
+    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-7), type: '清洁', description: '内外帐全面擦拭，通风晾干', handler: '阿岚' },
+    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-20), type: '检查', description: '检查地钉和防风绳，状态良好', handler: '阿岚' },
+    stove && { id: crypto.randomUUID(), gearId: stove.id, gearName: stove.name, owner: stove.owner, date: iso(-3), type: '补件', description: '更换了新的密封圈和点火电极', handler: '梁序' }
+  ].filter(Boolean);
+}
+
+function createDefaultTrips(gearList, memberList) {
+  const memberNames = memberList.map((m) => m.nickname);
+  const availableGears = gearList.filter((g) => g.status === '可借');
+  if (availableGears.length === 0) return [];
+  const sampleGears = availableGears.slice(0, 2).map((g) => ({
+    gearId: g.id,
+    gearName: g.name,
+    owner: g.owner,
+    deposit: g.deposit,
+    status: '待借'
+  }));
+  return [
+    {
+      id: crypto.randomUUID(),
+      destination: '天目湖营地',
+      startDate: iso(14),
+      members: memberNames.slice(0, 3),
+      gears: sampleGears,
+      notes: '周末湖边露营，记得带驱蚊液'
+    }
+  ];
+}
+
+function normalizeTrips(storedTrips, gearList, memberList) {
+  if (!Array.isArray(storedTrips)) return [];
+  const memberNames = memberList.map((m) => m.nickname);
+  return storedTrips.map((trip) => {
+    if (!trip || typeof trip !== 'object') return null;
+    return {
+      ...trip,
+      members: Array.isArray(trip.members) ? trip.members.filter((m) => memberNames.includes(m)) : [],
+      gears: Array.isArray(trip.gears)
+        ? trip.gears
+            .map((g) => {
+              if (!g || typeof g !== 'object') return null;
+              const gear = gearList.find((gear) => gear.id === g.gearId);
+              if (!gear) return g;
+              return {
+                ...g,
+                gearName: gear.name,
+                owner: gear.owner,
+                deposit: gear.deposit
+              };
+            })
+            .filter(Boolean)
+        : []
+    };
+  }).filter(Boolean);
+}
+
+function normalizeRequests(storedRequests, gearList) {
+  if (!Array.isArray(storedRequests)) return [];
+  return storedRequests.map((req) => {
+    if (!req || typeof req !== 'object') return null;
+    const gear = gearList.find((g) => g.id === req.gearId)
+      || gearList.find((g) => g.name === req.gearName && g.owner === req.owner);
+    return {
+      id: req.id || crypto.randomUUID(),
+      gearId: gear ? gear.id : (req.gearId || ''),
+      gearName: gear ? gear.name : (req.gearName || '未知装备'),
+      owner: gear ? gear.owner : (req.owner || ''),
+      borrower: req.borrower || '未知成员',
+      start: req.start || iso(0),
+      end: req.end || req.start || iso(0),
+      status: req.status || '待处理',
+      reason: req.reason || '',
+      damage: req.damage || ''
+    };
+  }).filter(Boolean);
+}
+
+function validateAmount(value, allowZero = true) {
+  if (value === '' || value === null || value === undefined) return { valid: false, message: '金额不能为空' };
+  const num = Number(value);
+  if (isNaN(num)) return { valid: false, message: '请输入有效的数字' };
+  if (num < 0) return { valid: false, message: '金额不能为负数' };
+  if (!allowZero && num === 0) return { valid: false, message: '金额不能为零' };
+  return { valid: true, message: '', amount: num };
+}
+
+function normalizeDepositRecords(records, gearList, requestList) {
+  if (!Array.isArray(records)) return [];
+  return records.map((record) => {
+    if (!record || typeof record !== 'object') return null;
+    const gear = gearList.find((g) => g.id === record.gearId)
+      || gearList.find((g) => g.name === record.gearName && g.owner === record.owner);
+    const req = requestList.find((r) => r.id === record.requestId);
+    return {
+      id: record.id || crypto.randomUUID(),
+      requestId: record.requestId || (req ? req.id : ''),
+      gearId: gear ? gear.id : (record.gearId || ''),
+      gearName: gear ? gear.name : (record.gearName || (req ? req.gearName : '未知装备')),
+      owner: gear ? gear.owner : (record.owner || (req ? req.owner : '')),
+      borrower: record.borrower || (req ? req.borrower : ''),
+      depositAmount: record.depositAmount !== undefined ? String(record.depositAmount) : (gear ? gear.deposit : '0'),
+      receivedAmount: record.receivedAmount !== undefined ? String(record.receivedAmount) : '0',
+      deductedAmount: record.deductedAmount !== undefined ? String(record.deductedAmount) : '0',
+      refundedAmount: record.refundedAmount !== undefined ? String(record.refundedAmount) : '0',
+      deductReason: record.deductReason || '',
+      status: record.status || '待收取',
+      notes: record.notes || '',
+      createdAt: record.createdAt || new Date().toISOString().slice(0, 10),
+      updatedAt: record.updatedAt || new Date().toISOString().slice(0, 10)
+    };
+  }).filter(Boolean);
+}
+
+function normalizeHandoverRecords(records, gearList, requestList) {
+  if (!Array.isArray(records)) return [];
+  return records.map((record) => {
+    if (!record || typeof record !== 'object') return null;
+    const gear = gearList.find((g) => g.id === record.gearId)
+      || gearList.find((g) => g.name === record.gearName && g.owner === record.owner);
+    const req = requestList.find((r) => r.id === record.requestId);
+    return {
+      id: record.id || crypto.randomUUID(),
+      type: record.type || '借出',
+      requestId: record.requestId || '',
+      gearId: gear ? gear.id : (record.gearId || ''),
+      gearName: gear ? gear.name : (record.gearName || '未知装备'),
+      owner: gear ? gear.owner : (record.owner || ''),
+      borrower: record.borrower || (req ? req.borrower : ''),
+      gearStatus: record.gearStatus || '',
+      deposit: record.deposit || (gear ? gear.deposit : ''),
+      accessories: record.accessories || '',
+      handoverNotes: record.handoverNotes || '',
+      damageRecord: record.damageRecord || '',
+      deductAmount: record.deductAmount !== undefined ? record.deductAmount : '',
+      deductReason: record.deductReason || '',
+      ownerConfirmed: !!record.ownerConfirmed,
+      borrowerConfirmed: !!record.borrowerConfirmed,
+      createdAt: record.createdAt || new Date().toISOString().slice(0, 10)
+    };
+  }).filter(Boolean);
+}
+
+function safeParseJSON(str, fallback) {
+  try {
+    const parsed = JSON.parse(str);
+    return parsed;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function hasOldData() {
+  return OLD_KEYS.some((key) => localStorage.getItem(key) !== null);
+}
+
+function migrateOldDataToDefaultSpace() {
+  const storedSpaces = safeParseJSON(localStorage.getItem(SPACE_LIST_KEY), null);
+  if (storedSpaces && Array.isArray(storedSpaces) && storedSpaces.length > 0) {
+    return { migrated: false, message: '' };
+  }
+
+  if (!hasOldData()) {
+    return { migrated: false, message: '' };
+  }
+
+  let warnings = [];
+
+  const defaultMembers = createDefaultMembers();
+  const defaultGears = createDefaultGears();
+  const defaultRequests = createDefaultRequests(defaultGears);
+  const defaultMaintenance = createDefaultMaintenanceRecords(defaultGears);
+  const defaultTrips = createDefaultTrips(defaultGears, defaultMembers);
+
+  let members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords;
+
+  try {
+    const rawMembers = localStorage.getItem('zfl-3-members');
+    members = rawMembers ? safeParseJSON(rawMembers, null) : null;
+    if (!members || !Array.isArray(members)) {
+      warnings.push('成员数据格式异常，已使用默认值');
+      members = defaultMembers;
+    } else {
+      members = members.filter((m) => m && typeof m === 'object' && m.nickname);
+      if (members.length === 0) {
+        warnings.push('成员数据为空，已使用默认值');
+        members = defaultMembers;
+      }
+    }
+  } catch (e) {
+    warnings.push('读取成员数据失败，已使用默认值');
+    members = defaultMembers;
+  }
+
+  try {
+    const rawGears = localStorage.getItem('zfl-3-gears');
+    gears = rawGears ? safeParseJSON(rawGears, null) : null;
+    if (!gears || !Array.isArray(gears)) {
+      warnings.push('装备数据格式异常，已使用默认值');
+      gears = defaultGears;
+    } else {
+      gears = gears.filter((g) => g && typeof g === 'object' && g.name);
+    }
+  } catch (e) {
+    warnings.push('读取装备数据失败，已使用默认值');
+    gears = defaultGears;
+  }
+
+  try {
+    const rawRequests = localStorage.getItem('zfl-3-requests');
+    requests = rawRequests ? normalizeRequests(safeParseJSON(rawRequests, []), gears) : defaultRequests;
+  } catch (e) {
+    warnings.push('读取申请数据失败，已使用默认值');
+    requests = defaultRequests;
+  }
+
+  try {
+    const rawMaintenance = localStorage.getItem('zfl-3-maintenance');
+    maintenanceRecords = rawMaintenance
+      ? normalizeMaintenanceRecords(safeParseJSON(rawMaintenance, []), gears)
+      : createDefaultMaintenanceRecords(gears);
+  } catch (e) {
+    warnings.push('读取保养数据失败，已使用默认值');
+    maintenanceRecords = createDefaultMaintenanceRecords(gears);
+  }
+
+  try {
+    const rawTrips = localStorage.getItem('zfl-3-trips');
+    trips = rawTrips
+      ? normalizeTrips(safeParseJSON(rawTrips, []), gears, members)
+      : createDefaultTrips(gears, members);
+  } catch (e) {
+    warnings.push('读取出行数据失败，已使用默认值');
+    trips = createDefaultTrips(gears, members);
+  }
+
+  try {
+    const rawHandovers = localStorage.getItem('zfl-3-handovers');
+    handoverRecords = rawHandovers
+      ? normalizeHandoverRecords(safeParseJSON(rawHandovers, []), gears, requests)
+      : [];
+  } catch (e) {
+    warnings.push('读取交接数据失败，已使用默认值');
+    handoverRecords = [];
+  }
+
+  try {
+    const rawDeposits = localStorage.getItem('zfl-3-deposits');
+    depositRecords = rawDeposits
+      ? normalizeDepositRecords(safeParseJSON(rawDeposits, []), gears, requests)
+      : [];
+  } catch (e) {
+    warnings.push('读取押金数据失败，已使用默认值');
+    depositRecords = [];
+  }
+
+  const defaultSpaceId = crypto.randomUUID();
+  const defaultSpace = {
+    id: defaultSpaceId,
+    name: '默认社群',
+    description: '从旧数据自动迁移的默认空间',
+    createdAt: new Date().toISOString().slice(0, 10)
+  };
+
+  const spacePayload = {
+    members,
+    gears,
+    requests,
+    maintenanceRecords,
+    trips,
+    handoverRecords,
+    depositRecords,
+    _migratedFromOld: true,
+    _migratedAt: new Date().toISOString()
+  };
+
+  localStorage.setItem(SPACE_LIST_KEY, JSON.stringify([defaultSpace]));
+  localStorage.setItem(CURRENT_SPACE_KEY, defaultSpaceId);
+  localStorage.setItem(SPACE_DATA_PREFIX + defaultSpaceId, JSON.stringify(spacePayload));
+
+  const msg = warnings.length > 0
+    ? `已迁移旧数据到「默认社群」。${warnings.join('；')}。如数据异常，可在空间设置中重置。`
+    : '已成功迁移旧数据到「默认社群」空间。';
+
+  return { migrated: true, message: msg, spaceId: defaultSpaceId };
+}
+
+function loadSpaceData(spaceId) {
+  try {
+    const raw = localStorage.getItem(SPACE_DATA_PREFIX + spaceId);
+    if (!raw) return createEmptySpaceData();
+    const data = safeParseJSON(raw, null);
+    if (!data || typeof data !== 'object') {
+      dataErrorWarning.value = '空间数据格式损坏，已加载空白数据。可尝试重新创建空间。';
+      return createEmptySpaceData();
+    }
+    const members = Array.isArray(data.members) ? data.members.filter((m) => m && m.nickname) : createDefaultMembers();
+    const gears = Array.isArray(data.gears) ? data.gears.filter((g) => g && g.name) : createDefaultGears();
+    const requests = normalizeRequests(data.requests, gears);
+    const maintenanceRecords = normalizeMaintenanceRecords(data.maintenanceRecords || [], gears);
+    const trips = normalizeTrips(data.trips || [], gears, members);
+    const handoverRecords = normalizeHandoverRecords(data.handoverRecords || [], gears, requests);
+    const depositRecords = normalizeDepositRecords(data.depositRecords || [], gears, requests);
+    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords };
+  } catch (e) {
+    dataErrorWarning.value = `加载空间数据时出错：${e.message}。已加载空白数据。`;
+    return createEmptySpaceData();
+  }
+}
+
+function createEmptySpaceData() {
+  const members = createDefaultMembers();
+  const gears = createDefaultGears();
+  return {
+    members,
+    gears,
+    requests: createDefaultRequests(gears),
+    maintenanceRecords: createDefaultMaintenanceRecords(gears),
+    trips: createDefaultTrips(gears, members),
+    handoverRecords: [],
+    depositRecords: []
+  };
+}
+
+function saveSpaceData(spaceId) {
+  if (!spaceId) return;
+  const data = spaceData.value[spaceId];
+  if (!data) return;
+  localStorage.setItem(SPACE_DATA_PREFIX + spaceId, JSON.stringify(data));
+}
+
+function importSpaceData(spaceId, importedData) {
+  if (!spaceId || !importedData || typeof importedData !== 'object') return false;
+  const currentData = spaceData.value[spaceId];
+  if (!currentData) return false;
+  if (importedData.members !== undefined) {
+    currentData.members = [...importedData.members];
+  }
+  if (importedData.gears !== undefined) {
+    currentData.gears = [...importedData.gears];
+  }
+  if (importedData.requests !== undefined) {
+    currentData.requests = [...importedData.requests];
+  }
+  if (importedData.maintenanceRecords !== undefined) {
+    currentData.maintenanceRecords = [...importedData.maintenanceRecords];
+  }
+  if (importedData.trips !== undefined) {
+    currentData.trips = [...importedData.trips];
+  }
+  if (importedData.handoverRecords !== undefined) {
+    currentData.handoverRecords = [...importedData.handoverRecords];
+  }
+  if (importedData.depositRecords !== undefined) {
+    currentData.depositRecords = [...importedData.depositRecords];
+  }
+  saveSpaceData(spaceId);
+  const firstMember = currentData.members?.[0];
+  if (firstMember && firstMember.nickname) {
+    currentUser.value = firstMember.nickname;
+  }
+  return true;
+}
+
+function getCurrentSpaceData() {
+  if (!currentSpaceId.value) return null;
+  return spaceData.value[currentSpaceId.value];
+}
+
+function ensureSpaceDataExists(spaceId) {
+  if (!spaceData.value[spaceId]) {
+    spaceData.value[spaceId] = loadSpaceData(spaceId);
+  }
+  return spaceData.value[spaceId];
+}
+
+function createSpace(name, description = '') {
+  const newSpace = {
+    id: crypto.randomUUID(),
+    name: name.trim() || '新社群空间',
+    description: description.trim(),
+    createdAt: new Date().toISOString().slice(0, 10)
+  };
+  spaces.value = [...spaces.value, newSpace];
+  localStorage.setItem(SPACE_LIST_KEY, JSON.stringify(spaces.value));
+  const emptyData = createEmptySpaceData();
+  spaceData.value[newSpace.id] = emptyData;
+  saveSpaceData(newSpace.id);
+  return newSpace;
+}
+
+function updateSpace(spaceId, name, description) {
+  spaces.value = spaces.value.map((s) =>
+    s.id === spaceId ? { ...s, name: name.trim() || s.name, description: description.trim() } : s
+  );
+  localStorage.setItem(SPACE_LIST_KEY, JSON.stringify(spaces.value));
+}
+
+function deleteSpace(spaceId) {
+  const space = spaces.value.find((s) => s.id === spaceId);
+  if (!space) return;
+  if (!confirm(`确定删除空间「${space.name}」吗？该空间的所有数据将被永久清除，此操作不可恢复。`)) return;
+  if (spaces.value.length <= 1) {
+    alert('至少需要保留一个空间');
+    return;
+  }
+  spaces.value = spaces.value.filter((s) => s.id !== spaceId);
+  localStorage.setItem(SPACE_LIST_KEY, JSON.stringify(spaces.value));
+  localStorage.removeItem(SPACE_DATA_PREFIX + spaceId);
+  delete spaceData.value[spaceId];
+  if (currentSpaceId.value === spaceId) {
+    switchSpace(spaces.value[0].id);
+  }
+}
+
+function switchSpace(spaceId) {
+  if (!spaceId || spaceId === currentSpaceId.value) return;
+  currentSpaceId.value = spaceId;
+  localStorage.setItem(CURRENT_SPACE_KEY, spaceId);
+  ensureSpaceDataExists(spaceId);
+  const data = getCurrentSpaceData();
+  if (data && data.members.length > 0 && !data.members.some((m) => m.nickname === currentUser.value)) {
+    currentUser.value = data.members[0].nickname;
+  }
+  dataErrorWarning.value = '';
+  closeSpaceMenu();
+}
+
+function resetSpaceData(spaceId) {
+  const space = spaces.value.find((s) => s.id === spaceId);
+  if (!space) return;
+  if (!confirm(`确定重置空间「${space.name}」的所有数据吗？此操作将清空该空间的成员、装备、申请等所有记录，不可恢复。`)) return;
+  spaceData.value[spaceId] = createEmptySpaceData();
+  saveSpaceData(spaceId);
+  if (currentSpaceId.value === spaceId) {
+    const data = getCurrentSpaceData();
+    if (data && data.members.length > 0) {
+      currentUser.value = data.members[0].nickname;
+    }
+  }
+  alert('空间数据已重置');
+}
+
+function handleDataImported(importedData) {
+  if (!currentSpaceId.value) return;
+  const success = importSpaceData(currentSpaceId.value, importedData);
+  if (success) {
+    console.log('数据导入成功');
+  }
+}
+
+function openCreateSpaceModal() {
+  spaceModalMode.value = 'create';
+  editingSpaceId.value = null;
+  spaceForm.value = { name: '', description: '' };
+  showSpaceModal.value = true;
+}
+
+function openEditSpaceModal(space) {
+  spaceModalMode.value = 'edit';
+  editingSpaceId.value = space.id;
+  spaceForm.value = { name: space.name, description: space.description || '' };
+  showSpaceModal.value = true;
+}
+
+function closeSpaceModal() {
+  showSpaceModal.value = false;
+  editingSpaceId.value = null;
+  spaceForm.value = { name: '', description: '' };
+}
+
+function saveSpaceModal() {
+  if (!spaceForm.value.name.trim()) {
+    alert('请输入空间名称');
+    return;
+  }
+  if (spaceModalMode.value === 'create') {
+    const newSpace = createSpace(spaceForm.value.name, spaceForm.value.description);
+    switchSpace(newSpace.id);
+  } else if (spaceModalMode.value === 'edit' && editingSpaceId.value) {
+    updateSpace(editingSpaceId.value, spaceForm.value.name, spaceForm.value.description);
+  }
+  closeSpaceModal();
+}
+
+function toggleSpaceMenu() {
+  showSpaceMenu.value = !showSpaceMenu.value;
+}
+
+function closeSpaceMenu() {
+  showSpaceMenu.value = false;
+}
+
+const members = computed({
+  get: () => getCurrentSpaceData()?.members || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.members = val;
+  }
+});
+
+const gears = computed({
+  get: () => getCurrentSpaceData()?.gears || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.gears = val;
+  }
+});
+
+const requests = computed({
+  get: () => getCurrentSpaceData()?.requests || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.requests = val;
+  }
+});
+
+const maintenanceRecords = computed({
+  get: () => getCurrentSpaceData()?.maintenanceRecords || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.maintenanceRecords = val;
+  }
+});
+
+const trips = computed({
+  get: () => getCurrentSpaceData()?.trips || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.trips = val;
+  }
+});
+
+const handoverRecords = computed({
+  get: () => getCurrentSpaceData()?.handoverRecords || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.handoverRecords = val;
+  }
+});
+
+const depositRecords = computed({
+  get: () => getCurrentSpaceData()?.depositRecords || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.depositRecords = val;
+  }
+});
+
+const currentSpace = computed(() => spaces.value.find((s) => s.id === currentSpaceId.value));
+
 const currentUser = ref('阿岚');
 const tab = ref('装备库');
 const category = ref('全部分类');
@@ -55,69 +669,6 @@ const recommendBorrower = ref(currentUser.value);
 const recommendStart = ref(iso(2));
 const recommendEnd = ref(iso(4));
 
-const gears = ref([
-  { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: '阿岚', available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
-  { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: '梁序', available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '' },
-  { id: crypto.randomUUID(), name: '营地灯三件组', category: '照明', owner: '小北', available: iso(3), deposit: '50', status: '可借', notes: '满电交接', damage: '' }
-]);
-
-const requests = ref([
-  { id: crypto.randomUUID(), gearId: gears.value[1].id, gearName: '炉头套装', owner: '梁序', borrower: '阿岚', start: iso(-1), end: iso(2), status: '已同意', reason: '周末湖边露营', damage: '' },
-  { id: crypto.randomUUID(), gearId: gears.value[2].id, gearName: '营地灯三件组', owner: '小北', borrower: '陈默', start: iso(3), end: iso(5), status: '待处理', reason: '夜钓备用', damage: '' }
-]);
-
-function findGearForMaintenance(record, gearList = gears.value) {
-  return gearList.find((gear) => gear.id === record.gearId)
-    || gearList.find((gear) => gear.name === record.gearName && gear.owner === record.owner);
-}
-
-function normalizeMaintenanceRecords(records, gearList = gears.value) {
-  return records
-    .map((record) => {
-      const gear = findGearForMaintenance(record, gearList);
-      return gear ? { ...record, gearId: gear.id, gearName: gear.name, owner: gear.owner } : null;
-    })
-    .filter(Boolean);
-}
-
-function createDefaultMaintenanceRecords(gearList = gears.value) {
-  const findGear = (name, owner) => gearList.find((gear) => gear.name === name && gear.owner === owner);
-  const tent = findGear('双人轻量帐', '阿岚');
-  const stove = findGear('炉头套装', '梁序');
-  return [
-    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-7), type: '清洁', description: '内外帐全面擦拭，通风晾干', handler: '阿岚' },
-    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-20), type: '检查', description: '检查地钉和防风绳，状态良好', handler: '阿岚' },
-    stove && { id: crypto.randomUUID(), gearId: stove.id, gearName: stove.name, owner: stove.owner, date: iso(-3), type: '补件', description: '更换了新的密封圈和点火电极', handler: '梁序' }
-  ].filter(Boolean);
-}
-
-const maintenanceRecords = ref(createDefaultMaintenanceRecords());
-
-function createDefaultTrips(gearList = gears.value, memberList = members.value) {
-  const memberNames = memberList.map((m) => m.nickname);
-  const availableGears = gearList.filter((g) => g.status === '可借');
-  if (availableGears.length === 0) return [];
-  const sampleGears = availableGears.slice(0, 2).map((g) => ({
-    gearId: g.id,
-    gearName: g.name,
-    owner: g.owner,
-    deposit: g.deposit,
-    status: '待借'
-  }));
-  return [
-    {
-      id: crypto.randomUUID(),
-      destination: '天目湖营地',
-      startDate: iso(14),
-      members: memberNames.slice(0, 3),
-      gears: sampleGears,
-      notes: '周末湖边露营，记得带驱蚊液'
-    }
-  ];
-}
-
-const trips = ref(createDefaultTrips());
-
 const handoverFilter = ref('全部交接单');
 const handoverTypeFilter = ref('全部类型');
 const showHandoverModal = ref(false);
@@ -141,13 +692,10 @@ const handoverForm = ref({
   borrowerConfirmed: false
 });
 
-const handoverRecords = ref([]);
-
 const depositStatusList = ['全部状态', '待收取', '已收取', '部分扣除', '已扣除', '已退还', '异常'];
 const depositFilter = ref('全部状态');
 const depositMemberFilter = ref('全部成员');
 const depositGearFilter = ref('全部装备');
-const depositRecords = ref([]);
 const showDepositModal = ref(false);
 const depositModalMode = ref('');
 const currentDepositId = ref(null);
@@ -166,39 +714,57 @@ const depositForm = ref({
   notes: ''
 });
 
-function validateAmount(value, allowZero = true) {
-  if (value === '' || value === null || value === undefined) return { valid: false, message: '金额不能为空' };
-  const num = Number(value);
-  if (isNaN(num)) return { valid: false, message: '请输入有效的数字' };
-  if (num < 0) return { valid: false, message: '金额不能为负数' };
-  if (!allowZero && num === 0) return { valid: false, message: '金额不能为零' };
-  return { valid: true, message: '', amount: num };
-}
+onMounted(() => {
+  const migrationResult = migrateOldDataToDefaultSpace();
+  if (migrationResult.migrated && migrationResult.message) {
+    migrationWarning.value = migrationResult.message;
+  }
 
-function normalizeDepositRecords(records, gearList = gears.value, requestList = requests.value) {
-  return records.map((record) => {
-    const gear = gearList.find((g) => g.id === record.gearId)
-      || gearList.find((g) => g.name === record.gearName && g.owner === record.owner);
-    const req = requestList.find((r) => r.id === record.requestId);
-    return {
-      id: record.id || crypto.randomUUID(),
-      requestId: record.requestId || (req ? req.id : ''),
-      gearId: gear ? gear.id : (record.gearId || ''),
-      gearName: gear ? gear.name : (record.gearName || (req ? req.gearName : '未知装备')),
-      owner: gear ? gear.owner : (record.owner || (req ? req.owner : '')),
-      borrower: record.borrower || (req ? req.borrower : ''),
-      depositAmount: record.depositAmount !== undefined ? String(record.depositAmount) : (gear ? gear.deposit : '0'),
-      receivedAmount: record.receivedAmount !== undefined ? String(record.receivedAmount) : '0',
-      deductedAmount: record.deductedAmount !== undefined ? String(record.deductedAmount) : '0',
-      refundedAmount: record.refundedAmount !== undefined ? String(record.refundedAmount) : '0',
-      deductReason: record.deductReason || '',
-      status: record.status || '待收取',
-      notes: record.notes || '',
-      createdAt: record.createdAt || new Date().toISOString().slice(0, 10),
-      updatedAt: record.updatedAt || new Date().toISOString().slice(0, 10)
-    };
-  });
-}
+  const rawSpaces = localStorage.getItem(SPACE_LIST_KEY);
+  let loadedSpaces = safeParseJSON(rawSpaces, null);
+  if (!loadedSpaces || !Array.isArray(loadedSpaces) || loadedSpaces.length === 0) {
+    const defaultSpace = createSpace('我的露营社群', '首个社群空间');
+    loadedSpaces = [defaultSpace];
+    ensureSpaceDataExists(defaultSpace.id);
+    currentSpaceId.value = defaultSpace.id;
+  } else {
+    spaces.value = loadedSpaces;
+    let savedCurrent = localStorage.getItem(CURRENT_SPACE_KEY);
+    if (!savedCurrent || !loadedSpaces.some((s) => s.id === savedCurrent)) {
+      savedCurrent = loadedSpaces[0].id;
+      localStorage.setItem(CURRENT_SPACE_KEY, savedCurrent);
+    }
+    currentSpaceId.value = savedCurrent;
+    ensureSpaceDataExists(savedCurrent);
+  }
+
+  spaces.value.forEach((s) => ensureSpaceDataExists(s.id));
+
+  const data = getCurrentSpaceData();
+  if (data && data.members.length > 0) {
+    currentUser.value = data.members[0].nickname;
+  }
+
+  if (trips.value.length > 0 && !selectedTripId.value) {
+    selectedTripId.value = trips.value[0].id;
+  }
+});
+
+watch(currentSpaceId, (newId, oldId) => {
+  if (oldId) saveSpaceData(oldId);
+  if (newId) {
+    ensureSpaceDataExists(newId);
+    saveSpaceData(newId);
+  }
+}, { immediate: false });
+
+watch(members, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(gears, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(requests, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(maintenanceRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(trips, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(handoverRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(depositRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 
 function createDepositRecord(requestId) {
   const req = requests.value.find((r) => r.id === requestId);
@@ -332,33 +898,6 @@ const depositCount = computed(() => depositRecords.value.length);
 const pendingDepositCount = computed(() => depositRecords.value.filter((d) => d.status === '待收取').length);
 const totalDepositReceived = computed(() => depositRecords.value.reduce((sum, d) => sum + (Number(d.receivedAmount) || 0), 0));
 const totalDepositDeducted = computed(() => depositRecords.value.reduce((sum, d) => sum + (Number(d.deductedAmount) || 0), 0));
-
-function normalizeHandoverRecords(records, gearList = gears.value, requestList = requests.value) {
-  return records.map((record) => {
-    const gear = gearList.find((g) => g.id === record.gearId)
-      || gearList.find((g) => g.name === record.gearName && g.owner === record.owner);
-    const req = requestList.find((r) => r.id === record.requestId);
-    return {
-      id: record.id || crypto.randomUUID(),
-      type: record.type || '借出',
-      requestId: record.requestId || '',
-      gearId: gear ? gear.id : (record.gearId || ''),
-      gearName: gear ? gear.name : (record.gearName || '未知装备'),
-      owner: gear ? gear.owner : (record.owner || ''),
-      borrower: record.borrower || (req ? req.borrower : ''),
-      gearStatus: record.gearStatus || '',
-      deposit: record.deposit || (gear ? gear.deposit : ''),
-      accessories: record.accessories || '',
-      handoverNotes: record.handoverNotes || '',
-      damageRecord: record.damageRecord || '',
-      deductAmount: record.deductAmount !== undefined ? record.deductAmount : '',
-      deductReason: record.deductReason || '',
-      ownerConfirmed: !!record.ownerConfirmed,
-      borrowerConfirmed: !!record.borrowerConfirmed,
-      createdAt: record.createdAt || new Date().toISOString().slice(0, 10)
-    };
-  });
-}
 
 function createBorrowHandover(requestId) {
   const req = requests.value.find((r) => r.id === requestId);
@@ -610,51 +1149,6 @@ function viewHandover(handoverId) {
   showHandoverModal.value = true;
 }
 
-function normalizeTrips(storedTrips, gearList = gears.value, memberList = members.value) {
-  const memberNames = memberList.map((m) => m.nickname);
-  return storedTrips.map((trip) => ({
-    ...trip,
-    members: trip.members.filter((m) => memberNames.includes(m)),
-    gears: trip.gears
-      .map((g) => {
-        const gear = gearList.find((gear) => gear.id === g.gearId);
-        if (!gear) return null;
-        return {
-          ...g,
-          gearName: gear.name,
-          owner: gear.owner,
-          deposit: gear.deposit
-        };
-      })
-      .filter(Boolean)
-  }));
-}
-
-function normalizeRequests(storedRequests, gearList = gears.value) {
-  const today = new Date();
-  const iso = (offset = 0) => {
-    const date = new Date(today);
-    date.setDate(date.getDate() + offset);
-    return date.toISOString().slice(0, 10);
-  };
-  return storedRequests.map((req) => {
-    const gear = gearList.find((g) => g.id === req.gearId)
-      || gearList.find((g) => g.name === req.gearName && g.owner === req.owner);
-    return {
-      id: req.id || crypto.randomUUID(),
-      gearId: gear ? gear.id : (req.gearId || ''),
-      gearName: gear ? gear.name : (req.gearName || '未知装备'),
-      owner: gear ? gear.owner : (req.owner || ''),
-      borrower: req.borrower || '未知成员',
-      start: req.start || iso(0),
-      end: req.end || req.start || iso(0),
-      status: req.status || '待处理',
-      reason: req.reason || '',
-      damage: req.damage || ''
-    };
-  });
-}
-
 function findConflictingRequests(gearId, startDate, endDate, excludeId = null) {
   const start = new Date(startDate);
   const end = new Date(endDate);
@@ -667,44 +1161,6 @@ function findConflictingRequests(gearId, startDate, endDate, excludeId = null) {
     return start <= reqEnd && end >= reqStart;
   });
 }
-
-onMounted(() => {
-  const storedMembers = localStorage.getItem('zfl-3-members');
-  const storedGears = localStorage.getItem('zfl-3-gears');
-  const storedRequests = localStorage.getItem('zfl-3-requests');
-  const storedMaintenance = localStorage.getItem('zfl-3-maintenance');
-  const storedTrips = localStorage.getItem('zfl-3-trips');
-  const storedHandovers = localStorage.getItem('zfl-3-handovers');
-  const storedDeposits = localStorage.getItem('zfl-3-deposits');
-  if (storedMembers) members.value = JSON.parse(storedMembers);
-  if (storedGears) gears.value = JSON.parse(storedGears);
-  requests.value = storedRequests
-    ? normalizeRequests(JSON.parse(storedRequests), gears.value)
-    : requests.value;
-  maintenanceRecords.value = storedMaintenance
-    ? normalizeMaintenanceRecords(JSON.parse(storedMaintenance), gears.value)
-    : createDefaultMaintenanceRecords(gears.value);
-  trips.value = storedTrips
-    ? normalizeTrips(JSON.parse(storedTrips), gears.value, members.value)
-    : createDefaultTrips(gears.value, members.value);
-  handoverRecords.value = storedHandovers
-    ? normalizeHandoverRecords(JSON.parse(storedHandovers), gears.value, requests.value)
-    : [];
-  depositRecords.value = storedDeposits
-    ? normalizeDepositRecords(JSON.parse(storedDeposits), gears.value, requests.value)
-    : [];
-  if (trips.value.length > 0 && !selectedTripId.value) {
-    selectedTripId.value = trips.value[0].id;
-  }
-});
-
-watch(members, (value) => localStorage.setItem('zfl-3-members', JSON.stringify(value)), { deep: true });
-watch(gears, (value) => localStorage.setItem('zfl-3-gears', JSON.stringify(value)), { deep: true });
-watch(requests, (value) => localStorage.setItem('zfl-3-requests', JSON.stringify(value)), { deep: true });
-watch(maintenanceRecords, (value) => localStorage.setItem('zfl-3-maintenance', JSON.stringify(value)), { deep: true });
-watch(trips, (value) => localStorage.setItem('zfl-3-trips', JSON.stringify(value)), { deep: true });
-watch(handoverRecords, (value) => localStorage.setItem('zfl-3-handovers', JSON.stringify(value)), { deep: true });
-watch(depositRecords, (value) => localStorage.setItem('zfl-3-deposits', JSON.stringify(value)), { deep: true });
 
 const categories = computed(() => ['全部分类', ...new Set(gears.value.map((gear) => gear.category))]);
 const filteredGears = computed(() => gears.value.filter((gear) => category.value === '全部分类' || gear.category === category.value));
@@ -945,6 +1401,8 @@ function addGear() {
   form.value = { name: '', category: '帐篷天幕', owner: currentUser.value, available: iso(2), deposit: '100', status: '可借', notes: '' };
 }
 
+const editingDraftId = ref(null);
+
 function applyGear() {
   const gear = gears.value.find((item) => item.id === requestForm.value.gearId);
   if (!gear || !requestForm.value.borrower) return;
@@ -1046,7 +1504,6 @@ function submitDraft(id) {
   updateRequest(id, '待处理');
 }
 
-const editingDraftId = ref(null);
 function editDraft(id) {
   const record = requests.value.find((item) => item.id === id);
   if (!record) return;
@@ -1350,14 +1807,68 @@ function addRecommendationToRequests() {
 watch(currentUser, (newVal) => {
   recommendBorrower.value = newVal;
 });
+
+function dismissMigrationWarning() {
+  migrationWarning.value = '';
+}
+
+function dismissDataErrorWarning() {
+  dataErrorWarning.value = '';
+}
 </script>
 
 <template>
   <main>
+    <div v-if="migrationWarning" class="migration-warning">
+      <span>📦 {{ migrationWarning }}</span>
+      <button class="ghost small" @click="dismissMigrationWarning">知道了</button>
+    </div>
+    <div v-if="dataErrorWarning" class="error-warning">
+      <span>⚠️ {{ dataErrorWarning }}</span>
+      <div class="warning-actions">
+        <button class="ghost small" @click="resetSpaceData(currentSpaceId)">重置当前空间</button>
+        <button class="ghost small" @click="dismissDataErrorWarning">关闭</button>
+      </div>
+    </div>
+
     <header class="hero">
       <div>
         <p>露营装备共享社群</p>
         <h1>装备借用工作台</h1>
+        <div class="space-switcher">
+          <div class="space-current" @click="toggleSpaceMenu">
+            <span class="space-icon">🏕</span>
+            <span class="space-name">{{ currentSpace?.name || '加载中...' }}</span>
+            <span v-if="currentSpace?.description" class="space-desc muted">· {{ currentSpace.description }}</span>
+            <span class="space-arrow">▼</span>
+          </div>
+          <div v-if="showSpaceMenu" class="space-menu" @click.stop>
+            <div class="space-menu-header">
+              <strong>切换社群空间</strong>
+              <button class="ghost small" @click="openCreateSpaceModal">+ 新建</button>
+            </div>
+            <div class="space-menu-list">
+              <div
+                v-for="space in spaces"
+                :key="space.id"
+                :class="['space-menu-item', { active: space.id === currentSpaceId }]"
+                @click="switchSpace(space.id)"
+              >
+                <div class="space-menu-info">
+                  <span class="space-menu-name">{{ space.name }}</span>
+                  <span v-if="space.description" class="muted space-menu-desc">{{ space.description }}</span>
+                </div>
+                <div class="space-menu-actions">
+                  <button class="ghost small" @click.stop="openEditSpaceModal(space)">编辑</button>
+                  <button v-if="spaces.length > 1" class="ghost small danger" @click.stop="deleteSpace(space.id)">删除</button>
+                </div>
+              </div>
+            </div>
+            <div class="space-menu-footer muted">
+              共 {{ spaces.length }} 个空间 · 数据各自独立
+            </div>
+          </div>
+        </div>
       </div>
       <label>
         当前成员
@@ -1368,7 +1879,7 @@ watch(currentUser, (newVal) => {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -1788,69 +2299,6 @@ watch(currentUser, (newVal) => {
       </div>
     </section>
 
-    <div v-if="showDepositModal" class="modal-overlay" @click.self="closeDepositModal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>{{ depositModalMode === 'edit' ? '编辑押金记录' : '押金详情' }}</h3>
-          <button class="ghost small" @click="closeDepositModal">关闭</button>
-        </div>
-        <div class="modal-body">
-          <div class="handover-info">
-            <div class="info-row">
-              <span class="info-label">装备名称</span>
-              <span class="info-value">{{ depositForm.gearName }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">出借人</span>
-              <span class="info-value">{{ depositForm.owner }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">借用人</span>
-              <span class="info-value">{{ depositForm.borrower }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">当前状态</span>
-              <span :class="['info-value', 'deposit-status-badge', depositForm.status]">{{ depositForm.status }}</span>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label>押金应收（元）</label>
-            <input v-model="depositForm.depositAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="押金金额" />
-          </div>
-
-          <div class="form-group">
-            <label>已收金额（元）</label>
-            <input v-model="depositForm.receivedAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="已收取的押金金额" />
-          </div>
-
-          <div class="form-group">
-            <label>扣除金额（元）</label>
-            <input v-model="depositForm.deductedAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="因损耗扣除的金额" />
-          </div>
-
-          <div class="form-group">
-            <label>退还金额（元）</label>
-            <input v-model="depositForm.refundedAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="已退还的金额" />
-          </div>
-
-          <div class="form-group">
-            <label>扣除原因</label>
-            <textarea v-model="depositForm.deductReason" :disabled="depositModalMode !== 'edit'" placeholder="扣除押金的原因"></textarea>
-          </div>
-
-          <div class="form-group">
-            <label>备注</label>
-            <textarea v-model="depositForm.notes" :disabled="depositModalMode !== 'edit'" placeholder="其他备注信息"></textarea>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost" @click="closeDepositModal">取消</button>
-          <button v-if="depositModalMode === 'edit'" @click="saveDepositRecord">保存</button>
-        </div>
-      </div>
-    </div>
-
     <section v-if="tab === '保养记录'" class="layout">
       <form class="panel" @submit.prevent="addMaintenance">
         <h2>登记保养</h2>
@@ -2073,376 +2521,11 @@ watch(currentUser, (newVal) => {
       </div>
     </section>
 
-    <div v-if="showHandoverModal" class="modal-overlay" @click.self="closeHandoverModal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>{{ handoverModalMode }}交接确认单</h3>
-          <button class="ghost small" @click="closeHandoverModal">关闭</button>
-        </div>
-        <div class="modal-body">
-          <div class="handover-info">
-            <div class="info-row">
-              <span class="info-label">装备名称</span>
-              <span class="info-value">{{ handoverForm.gearName }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">出借人</span>
-              <span class="info-value">{{ handoverForm.owner }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">借用人</span>
-              <span class="info-value">{{ handoverForm.borrower }}</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">交接日期</span>
-              <span class="info-value">{{ handoverForm.createdAt || new Date().toISOString().slice(0, 10) }}</span>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label>装备状态</label>
-            <textarea v-model="handoverForm.gearStatus" placeholder="描述装备当前状态，如：完好、有轻微划痕等"></textarea>
-          </div>
-
-          <div class="form-group">
-            <label>押金（元）</label>
-            <input v-model="handoverForm.deposit" placeholder="押金金额" />
-          </div>
-
-          <div class="form-group">
-            <label>配件清单</label>
-            <textarea v-model="handoverForm.accessories" placeholder="列出随装备交接的配件，如：地钉、防潮垫、收纳袋等"></textarea>
-          </div>
-
-          <div class="form-group">
-            <label>交接备注</label>
-            <textarea v-model="handoverForm.handoverNotes" placeholder="其他需要说明的事项"></textarea>
-          </div>
-
-          <div v-if="handoverModalMode === '归还'" class="form-group">
-            <label>损耗记录</label>
-            <textarea v-model="handoverForm.damageRecord" placeholder="记录归还时的损耗情况，没有则填写无"></textarea>
-          </div>
-
-          <div v-if="handoverModalMode === '归还'" class="form-group">
-            <label>押金扣除金额（元）</label>
-            <input v-model="handoverForm.deductAmount" type="number" min="0" placeholder="填写扣除金额，0表示不扣除" />
-            <small class="muted">押金总额：¥{{ handoverForm.deposit || 0 }}</small>
-          </div>
-
-          <div v-if="handoverModalMode === '归还'" class="form-group">
-            <label>扣除原因</label>
-            <textarea v-model="handoverForm.deductReason" placeholder="说明扣除押金的原因，如装备损坏、配件丢失等"></textarea>
-          </div>
-
-          <div class="confirm-section">
-            <h4>双方确认</h4>
-            <div class="confirm-buttons">
-              <button
-                :class="['confirm-btn', { confirmed: handoverForm.ownerConfirmed }]"
-                @click="toggleHandoverConfirm('owner')"
-                type="button"
-              >
-                {{ handoverForm.ownerConfirmed ? '✓ 已确认' : '出借人确认' }}
-              </button>
-              <button
-                :class="['confirm-btn', { confirmed: handoverForm.borrowerConfirmed }]"
-                @click="toggleHandoverConfirm('borrower')"
-                type="button"
-              >
-                {{ handoverForm.borrowerConfirmed ? '✓ 已确认' : '借用人确认' }}
-              </button>
-            </div>
-            <p v-if="handoverForm.ownerConfirmed && handoverForm.borrowerConfirmed" class="confirm-success">
-              双方已确认，交接完成！
-            </p>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="ghost" @click="closeHandoverModal">取消</button>
-          <button @click="saveHandover">保存交接单</button>
-        </div>
-      </div>
-    </div>
+    <DataImportExport
+      v-if="tab === '数据导入导出'"
+      :spaceData="getCurrentSpaceData() || {}"
+      :spaceInfo="currentSpace"
+      @imported="handleDataImported"
+    />
   </main>
 </template>
-
-<style>
-* { box-sizing: border-box; }
-body { margin: 0; background: #f2f4ed; color: #22251f; font-family: Inter, "PingFang SC", Arial, sans-serif; }
-button, input, select, textarea { font: inherit; }
-main { min-height: 100vh; padding: 28px; }
-.hero { display: flex; justify-content: space-between; gap: 20px; align-items: end; padding: 30px; border-radius: 8px; color: #fff; background: linear-gradient(135deg, #263623, #84704f); }
-.hero p { margin: 0 0 6px; opacity: .8; }
-h1 { margin: 0; font-size: clamp(32px, 5vw, 56px); letter-spacing: 0; }
-h2 { margin: 0; font-size: 18px; }
-.hero label { display: grid; gap: 8px; min-width: 190px; }
-.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
-.tabs button { background: #fff; color: #303427; border: 1px solid #d8dccf; }
-.tabs .active { background: #2f4a2c; color: #fff; }
-.metrics { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; margin-bottom: 16px; }
-.metrics article, .panel, .cards article, .requestList article { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 18px; box-shadow: 0 10px 28px rgb(33 42 27 / .07); }
-.metrics strong { display: block; font-size: 28px; }
-.metrics span, article span, p, small { color: #63705d; }
-.layout { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
-form.panel { display: flex; flex-direction: column; gap: 10px; }
-input, select, textarea { width: 100%; border: 1px solid #cfd8ca; border-radius: 8px; padding: 11px 12px; background: #fff; color: #22251f; }
-textarea { min-height: 96px; resize: vertical; }
-button { border: 0; border-radius: 8px; padding: 11px 14px; background: #2f4a2c; color: #fff; cursor: pointer; }
-.ghost { background: #edf1e8; color: #2c3527; }
-.ghost.small { padding: 6px 12px; font-size: 13px; }
-.ghost.danger { color: #9b2c2c; }
-.split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.toolbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
-.toolbar select { max-width: 220px; }
-.muted { color: #63705d; font-size: 14px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
-article strong, article span { display: block; }
-article span { margin-top: 5px; }
-.requestList, .memberList { display: grid; gap: 10px; }
-.warning { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #92400e; font-size: 14px; }
-.member-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.member-info { flex: 1; }
-.member-info small { display: block; margin-top: 6px; }
-.actions { display: flex; gap: 8px; margin-top: 10px; }
-
-.member-checkboxes, .gear-select-section { display: flex; flex-direction: column; gap: 6px; }
-.checkbox-list { display: flex; flex-direction: column; gap: 6px; max-height: 120px; overflow-y: auto; border: 1px solid #cfd8ca; border-radius: 8px; padding: 8px; }
-.checkbox-item { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 4px; }
-.checkbox-item:hover { background: #edf1e8; }
-.checkbox-item input { width: auto; margin: 0; }
-.checkbox-item span { margin: 0; color: #22251f; }
-
-.gear-checklist { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; border: 1px solid #cfd8ca; border-radius: 8px; padding: 8px; }
-.gear-checkbox-item { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 8px; border-radius: 6px; }
-.gear-checkbox-item:hover { background: #edf1e8; }
-.gear-checkbox-item input { width: auto; margin-top: 4px; }
-.gear-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.gear-name { font-weight: 600; color: #22251f; }
-.gear-meta { font-size: 12px; color: #63705d; }
-.gear-status { font-size: 12px; padding: 2px 8px; border-radius: 4px; width: fit-content; }
-.gear-status.available { background: #dcfce7; color: #166534; }
-.gear-status.unavailable { background: #fee2e2; color: #991b1b; }
-
-.trip-layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
-.trip-list { display: flex; flex-direction: column; gap: 10px; }
-.trip-card { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 14px; cursor: pointer; transition: all 0.2s; }
-.trip-card:hover { border-color: #2f4a2c; }
-.trip-card.active { border-color: #2f4a2c; background: #f6f8f2; }
-.trip-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.trip-header strong { font-size: 15px; }
-.trip-date { font-size: 12px; color: #63705d; white-space: nowrap; }
-.trip-meta { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
-.trip-meta span { font-size: 12px; margin: 0; }
-.trip-actions { display: flex; gap: 6px; }
-
-.trip-detail { display: flex; flex-direction: column; gap: 16px; }
-.trip-detail-header { background: #f6f8f2; border-radius: 8px; padding: 16px; }
-.trip-detail-header h3 { margin: 0 0 8px; font-size: 20px; }
-.trip-detail-header span { display: block; margin-top: 4px; }
-.trip-notes { margin: 8px 0 0; padding: 10px; background: #fff; border-radius: 6px; border-left: 3px solid #2f4a2c; }
-
-.trip-gear-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.gear-section { display: flex; flex-direction: column; gap: 10px; }
-.section-header h4 { margin: 0; font-size: 16px; color: #2f4a2c; }
-.gear-list { display: flex; flex-direction: column; gap: 8px; }
-.gear-list-item { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.gear-list-item.confirmed { border-left: 4px solid #16a34a; background: #f0fdf4; }
-.gear-list-info { flex: 1; }
-.gear-list-info strong { display: block; margin-bottom: 4px; }
-.gear-list-info span { display: block; margin-top: 4px; font-size: 13px; }
-.availability-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-top: 6px; }
-.availability-badge.available { background: #dcfce7; color: #166534; }
-.availability-badge.unavailable { background: #fee2e2; color: #991b1b; }
-.gear-list-actions { display: flex; gap: 6px; flex-shrink: 0; }
-
-.conflict-warning { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 12px; margin-top: 8px; }
-.conflict-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; color: #991b1b; margin-bottom: 10px; }
-.conflict-list { display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto; }
-.conflict-item { background: #fff; border: 1px solid #fecaca; border-radius: 6px; padding: 10px; }
-.conflict-meta { font-size: 13px; color: #6b7280; margin-top: 3px; }
-.conflict-status { display: inline-block; margin-top: 5px; font-size: 12px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
-.conflict-status.待处理 { background: #fef3c7; color: #92400e; }
-.conflict-status.已同意 { background: #dcfce7; color: #166534; }
-.conflict-status.借出中 { background: #dbeafe; color: #1e40af; }
-.conflict-status.草稿 { background: #fef3c7; color: #92400e; }
-.conflict-reason { font-size: 13px; color: #4b5563; margin-top: 5px; }
-
-.status-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-right: 4px; }
-.status-tag.草稿 { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
-.status-tag.待处理 { background: #fef9c3; color: #854d0e; }
-.status-tag.已同意 { background: #dcfce7; color: #166534; }
-.status-tag.已拒绝 { background: #fee2e2; color: #991b1b; }
-.status-tag.借出中 { background: #dbeafe; color: #1e40af; }
-.status-tag.已归还 { background: #e5e7eb; color: #374151; }
-
-.requestList article.draft-card { background: #fffbeb; border-left: 4px solid #f59e0b; }
-
-
-
-.calendar-panel { padding: 22px; }
-.calendar-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-.calendar-title-group { display: flex; align-items: center; gap: 16px; }
-.week-nav { display: flex; gap: 6px; }
-.calendar-filters { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; }
-.calendar-filters label { display: grid; gap: 6px; min-width: 160px; font-size: 13px; color: #63705d; }
-.calendar-filters select { margin: 0; }
-
-.calendar-grid { border: 1px solid #e5e7db; border-radius: 8px; overflow: hidden; }
-.calendar-header-row, .calendar-data-row { display: grid; grid-template-columns: 180px repeat(7, 1fr); }
-.calendar-header-row { background: #2f4a2c; color: #fff; }
-.calendar-corner { padding: 14px 12px; font-weight: 600; border-right: 1px solid #3f5a3c; background: #263e23; }
-.calendar-date-header { padding: 10px 8px; text-align: center; border-right: 1px solid #3f5a3c; }
-.calendar-date-header:last-child { border-right: 0; }
-.calendar-date-header.today { background: #4a6b47; }
-.date-label { font-size: 15px; font-weight: 600; }
-.weekday-label { font-size: 12px; opacity: 0.85; margin-top: 2px; }
-
-.calendar-data-row { border-top: 1px solid #e5e7db; min-height: 90px; }
-.calendar-data-row:nth-child(even) .calendar-cell,
-.calendar-data-row:nth-child(even) .calendar-row-label { background: #fafbf7; }
-.calendar-row-label { padding: 12px 10px; border-right: 1px solid #e5e7db; display: flex; align-items: flex-start; }
-.calendar-cell { padding: 6px; border-right: 1px solid #e5e7db; min-height: 90px; position: relative; }
-.calendar-cell:last-child { border-right: 0; }
-.calendar-cell.today { background: #fffbeb !important; }
-.cell-requests { display: flex; flex-direction: column; gap: 4px; }
-.cal-request { border-radius: 5px; padding: 5px 7px; font-size: 12px; cursor: pointer; border-left: 3px solid; }
-.cal-request.待处理 { background: #fffbeb; border-left-color: #f59e0b; color: #92400e; }
-.cal-request.已同意 { background: #f0fdf4; border-left-color: #22c55e; color: #166534; }
-.cal-request.借出中 { background: #eff6ff; border-left-color: #3b82f6; color: #1e40af; }
-.cal-req-name { font-weight: 600; line-height: 1.3; }
-.cal-req-status { font-size: 11px; opacity: 0.8; margin-top: 1px; }
-
-.calendar-legend { display: flex; gap: 20px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #e5e7db; flex-wrap: wrap; }
-.legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #63705d; }
-.legend-dot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
-.legend-dot.待处理 { background: #fffbeb; border: 2px solid #f59e0b; }
-.legend-dot.已同意 { background: #f0fdf4; border: 2px solid #22c55e; }
-.legend-dot.借出中 { background: #eff6ff; border: 2px solid #3b82f6; }
-
-.filter-group { display: flex; gap: 8px; }
-.filter-group select { max-width: 150px; }
-
-.handover-list { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
-.handover-card { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 16px; cursor: pointer; transition: all 0.2s; }
-.handover-card:hover { border-color: #2f4a2c; box-shadow: 0 4px 12px rgba(47, 74, 44, 0.1); }
-.handover-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.handover-header strong { font-size: 16px; }
-.handover-type-badge { padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-.handover-type-badge.借出 { background: #dbeafe; color: #1e40af; }
-.handover-type-badge.归还 { background: #dcfce7; color: #166534; }
-.handover-meta { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-.handover-meta span { font-size: 13px; color: #63705d; margin: 0; }
-.handover-status-row { display: flex; justify-content: space-between; align-items: center; }
-.status-badge { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
-.status-badge.待确认 { background: #fef3c7; color: #92400e; }
-.status-badge.部分确认 { background: #dbeafe; color: #1e40af; }
-.status-badge.已完成 { background: #dcfce7; color: #166534; }
-.confirm-states { display: flex; gap: 12px; }
-.confirm-state { font-size: 12px; color: #9ca3af; }
-.confirm-state.confirmed { color: #166534; font-weight: 600; }
-.damage-note { margin-top: 10px; padding: 8px 12px; background: #fef2f2; border-radius: 6px; font-size: 13px; color: #991b1b; }
-
-.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
-.modal-content { background: #fff; border-radius: 12px; width: 100%; max-width: 560px; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
-.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 22px; border-bottom: 1px solid #e5e7db; }
-.modal-header h3 { margin: 0; font-size: 18px; }
-.modal-body { flex: 1; overflow-y: auto; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px; }
-.modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 22px; border-top: 1px solid #e5e7db; }
-
-.handover-info { background: #f6f8f2; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
-.info-row { display: flex; justify-content: space-between; gap: 12px; }
-.info-label { color: #63705d; font-size: 13px; }
-.info-value { font-weight: 500; color: #22251f; }
-
-.form-group { display: flex; flex-direction: column; gap: 6px; }
-.form-group label { font-size: 13px; color: #63705d; font-weight: 500; }
-
-.confirm-section { background: #f9faf7; border: 1px dashed #cfd8ca; border-radius: 8px; padding: 16px; }
-.confirm-section h4 { margin: 0 0 12px; font-size: 15px; color: #2f4a2c; }
-.confirm-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.confirm-btn { padding: 12px; border-radius: 8px; border: 2px solid #cfd8ca; background: #fff; color: #63705d; font-weight: 500; cursor: pointer; transition: all 0.2s; }
-.confirm-btn:hover { border-color: #2f4a2c; color: #2f4a2c; }
-.confirm-btn.confirmed { background: #dcfce7; border-color: #22c55e; color: #166534; }
-.confirm-success { margin: 12px 0 0; text-align: center; color: #166534; font-weight: 600; font-size: 14px; }
-
-.deposit-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
-.deposit-summary-item { background: #f6f8f2; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
-.deposit-summary-label { font-size: 13px; color: #63705d; }
-.deposit-summary-value { font-size: 22px; font-weight: 700; color: #22251f; }
-.deposit-summary-value.pending { color: #92400e; }
-.deposit-summary-value.received { color: #166534; }
-.deposit-summary-value.deducted { color: #991b1b; }
-
-.deposit-list { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
-.deposit-card { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 16px; cursor: pointer; transition: all 0.2s; }
-.deposit-card:hover { border-color: #2f4a2c; box-shadow: 0 4px 12px rgba(47, 74, 44, 0.1); }
-.deposit-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-.deposit-header strong { font-size: 16px; }
-.deposit-status-badge { padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-.deposit-status-badge.待收取 { background: #fef3c7; color: #92400e; }
-.deposit-status-badge.已收取 { background: #dbeafe; color: #1e40af; }
-.deposit-status-badge.部分扣除 { background: #fef3c7; color: #92400e; }
-.deposit-status-badge.已扣除 { background: #fee2e2; color: #991b1b; }
-.deposit-status-badge.已退还 { background: #dcfce7; color: #166534; }
-.deposit-status-badge.异常 { background: #fee2e2; color: #991b1b; }
-.deposit-meta { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-.deposit-meta span { font-size: 13px; color: #63705d; margin: 0; }
-.deposit-amounts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #f6f8f2; border-radius: 6px; padding: 10px; margin-bottom: 10px; }
-.amount-item { display: flex; flex-direction: column; gap: 4px; text-align: center; }
-.amount-label { font-size: 11px; color: #63705d; }
-.amount-value { font-size: 15px; font-weight: 600; color: #22251f; }
-.amount-value.received { color: #1e40af; }
-.amount-value.deducted { color: #991b1b; }
-.amount-value.refunded { color: #166534; }
-.deduct-reason { margin: 0; padding: 8px 12px; background: #fef2f2; border-radius: 6px; font-size: 13px; color: #991b1b; }
-.deposit-notes { margin: 6px 0 0; font-size: 13px; color: #63705d; }
-.deposit-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
-
-.recommend-empty { padding: 60px 20px; text-align: center; }
-.recommend-empty-icon { font-size: 64px; margin-bottom: 16px; }
-.recommend-empty h3 { margin: 0 0 8px; color: #2f4a2c; }
-.recommend-summary { display: flex; gap: 10px; align-items: center; }
-.recommend-summary button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.gap-section { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
-.gap-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; color: #991b1b; }
-.gap-header strong { font-size: 15px; }
-.gap-list { display: flex; flex-direction: column; gap: 8px; }
-.gap-item { background: #fff; border-radius: 6px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; }
-.gap-category { font-weight: 600; color: #991b1b; }
-.gap-detail { font-size: 13px; color: #63705d; }
-
-.recommend-categories { display: flex; flex-direction: column; gap: 20px; }
-.recommend-category { background: #f6f8f2; border-radius: 8px; padding: 16px; }
-.recommend-category-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.recommend-category-header h3 { margin: 0; font-size: 16px; color: #2f4a2c; }
-.category-meta { font-size: 13px; color: #63705d; }
-.no-gear-warning { padding: 12px; background: #fff; border-radius: 6px; text-align: center; border: 1px dashed #cfd8ca; }
-
-.recommend-gear-list { display: flex; flex-direction: column; gap: 8px; }
-.recommend-gear-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: #fff; border: 2px solid transparent; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-.recommend-gear-item:hover { background: #fafbf7; border-color: #cfd8ca; }
-.recommend-gear-item.selected { background: #f0fdf4; border-color: #22c55e; }
-.recommend-gear-item input { width: auto; margin-top: 4px; }
-.recommend-gear-item .gear-info { flex: 1; display: flex; flex-direction: column; gap: 3px; }
-.recommend-gear-item .gear-name { font-weight: 600; color: #22251f; }
-.recommend-gear-item .gear-meta { font-size: 12px; color: #63705d; }
-.recommend-gear-item .gear-notes { font-size: 12px; color: #84704f; font-style: italic; }
-
-@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar, .recommend-summary, .gap-header, .recommend-category-header, .gap-item { flex-direction: column; align-items: stretch; gap: 10px; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; }
-  .deposit-summary { grid-template-columns: repeat(2, 1fr); }
-  .deposit-list { grid-template-columns: 1fr; }
-  .deposit-amounts { grid-template-columns: repeat(2, 1fr); }
-  .calendar-toolbar { flex-direction: column; align-items: stretch; }
-  .calendar-title-group { justify-content: space-between; }
-  .calendar-header-row, .calendar-data-row { grid-template-columns: 120px repeat(7, 1fr); overflow-x: auto; min-width: 700px; }
-  .calendar-grid { overflow-x: auto; }
-  .handover-list { grid-template-columns: 1fr; }
-  .filter-group { flex-direction: row; flex-wrap: wrap; }
-  .filter-group select { max-width: none; flex: 1; min-width: 120px; }
-  .modal-overlay { padding: 0; }
-  .modal-content { max-height: 100vh; border-radius: 0; }
-  .confirm-buttons { grid-template-columns: 1fr; }
-}
-</style>
