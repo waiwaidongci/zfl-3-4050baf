@@ -1,27 +1,15 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import DataImportExport from './components/DataImportExport.vue';
-
-const today = new Date();
-const iso = (offset = 0) => {
-  const date = new Date(today);
-  date.setDate(date.getDate() + offset);
-  return date.toISOString().slice(0, 10);
-};
-
-const SPACE_LIST_KEY = 'zfl-3-spaces';
-const CURRENT_SPACE_KEY = 'zfl-3-current-space';
-const SPACE_DATA_PREFIX = 'zfl-3-space-';
-
-const OLD_KEYS = [
-  'zfl-3-members',
-  'zfl-3-gears',
-  'zfl-3-requests',
-  'zfl-3-maintenance',
-  'zfl-3-trips',
-  'zfl-3-handovers',
-  'zfl-3-deposits'
-];
+import {
+  safeParseJSON,
+  SPACE_LIST_KEY,
+  CURRENT_SPACE_KEY,
+  SPACE_DATA_PREFIX,
+  OLD_KEYS,
+  hasOldData,
+  iso
+} from './composables/useSpaceStorage.js';
 
 const spaces = ref([]);
 const currentSpaceId = ref(null);
@@ -220,19 +208,6 @@ function normalizeHandoverRecords(records, gearList, requestList) {
       createdAt: record.createdAt || new Date().toISOString().slice(0, 10)
     };
   }).filter(Boolean);
-}
-
-function safeParseJSON(str, fallback) {
-  try {
-    const parsed = JSON.parse(str);
-    return parsed;
-  } catch (e) {
-    return fallback;
-  }
-}
-
-function hasOldData() {
-  return OLD_KEYS.some((key) => localStorage.getItem(key) !== null);
 }
 
 function migrateOldDataToDefaultSpace() {

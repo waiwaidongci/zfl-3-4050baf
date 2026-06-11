@@ -15,11 +15,14 @@
     <div class="summary-section">
       <h4>📊 数据摘要</h4>
       <div class="summary-grid">
-        <div v-for="entity in entities" :key="entity.key" class="summary-card">
-          <span class="summary-count">{{ previewResult.summary[entity.key] }}</span>
+        <div v-for="entity in entities" :key="entity.key" class="summary-card" :class="{ 'not-included': !isEntityIncluded(entity.key) }">
+          <span class="summary-count">{{ getEntityDisplay(entity.key) }}</span>
           <span class="summary-label">{{ entity.label }}</span>
         </div>
       </div>
+      <p v-if="hasExcludedEntities" class="excluded-hint">
+        ℹ️ 灰色项表示该类数据未包含在导入文件中，不会被覆盖
+      </p>
     </div>
 
     <div v-if="previewResult.warnings.length > 0" class="warning-section">
@@ -72,6 +75,19 @@ const entities = computed(() => {
     key,
     label: ENTITY_LABELS[key]
   }));
+});
+
+function isEntityIncluded(entityKey) {
+  return props.previewResult.summary?.[entityKey] !== undefined;
+}
+
+function getEntityDisplay(entityKey) {
+  const count = props.previewResult.summary?.[entityKey];
+  return count !== undefined ? count : '—';
+}
+
+const hasExcludedEntities = computed(() => {
+  return DATA_ENTITIES.some((key) => !isEntityIncluded(key));
 });
 
 const displayedWarnings = computed(() => {
@@ -154,6 +170,26 @@ const displayedWarnings = computed(() => {
   background: #f7f9f5;
   border-radius: 8px;
   padding: 12px 8px;
+  text-align: center;
+}
+
+.summary-card.not-included {
+  background: #f5f5f5;
+  opacity: 0.6;
+}
+
+.summary-card.not-included .summary-count {
+  color: #999;
+}
+
+.summary-card.not-included .summary-label {
+  color: #aaa;
+}
+
+.excluded-hint {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: #888;
   text-align: center;
 }
 

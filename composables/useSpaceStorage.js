@@ -1,3 +1,15 @@
+import { ref, computed } from 'vue';
+import {
+  normalizeMembers,
+  normalizeGears,
+  normalizeRequests,
+  normalizeMaintenanceRecords,
+  normalizeTrips,
+  normalizeHandoverRecords,
+  normalizeDepositRecords,
+  DATA_ENTITIES
+} from '../utils/dataTransform.js';
+
 export const SPACE_LIST_KEY = 'zfl-3-spaces';
 export const CURRENT_SPACE_KEY = 'zfl-3-current-space';
 export const SPACE_DATA_PREFIX = 'zfl-3-space-';
@@ -12,12 +24,92 @@ export const OLD_KEYS = [
   'zfl-3-deposits'
 ];
 
+const _today = new Date();
+export function iso(offset = 0) {
+  const date = new Date(_today);
+  date.setDate(date.getDate() + offset);
+  return date.toISOString().slice(0, 10);
+}
+
 export function safeParseJSON(str, fallback) {
   try {
     return JSON.parse(str);
   } catch (e) {
     return fallback;
   }
+}
+
+export function createDefaultMembers() {
+  return [
+    { id: crypto.randomUUID(), nickname: '阿岚', phone: '', area: '', notes: '' },
+    { id: crypto.randomUUID(), nickname: '梁序', phone: '', area: '', notes: '' },
+    { id: crypto.randomUUID(), nickname: '小北', phone: '', area: '', notes: '' },
+    { id: crypto.randomUUID(), nickname: '陈默', phone: '', area: '', notes: '' }
+  ];
+}
+
+export function createDefaultGears(ownerName = '阿岚', stoveOwner = '梁序', lampOwner = '小北') {
+  return [
+    { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: ownerName, available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
+    { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: stoveOwner, available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '' },
+    { id: crypto.randomUUID(), name: '营地灯三件组', category: '照明', owner: lampOwner, available: iso(3), deposit: '50', status: '可借', notes: '满电交接', damage: '' }
+  ];
+}
+
+export function createDefaultRequests(gearList) {
+  if (gearList.length < 3) return [];
+  return [
+    { id: crypto.randomUUID(), gearId: gearList[1].id, gearName: '炉头套装', owner: gearList[1].owner, borrower: '阿岚', start: iso(-1), end: iso(2), status: '已同意', reason: '周末湖边露营', damage: '' },
+    { id: crypto.randomUUID(), gearId: gearList[2].id, gearName: '营地灯三件组', owner: gearList[2].owner, borrower: '陈默', start: iso(3), end: iso(5), status: '待处理', reason: '夜钓备用', damage: '' }
+  ];
+}
+
+export function createDefaultMaintenanceRecords(gearList) {
+  const findGear = (name, owner) => gearList.find((gear) => gear.name === name && gear.owner === owner);
+  const tent = findGear('双人轻量帐', '阿岚');
+  const stove = findGear('炉头套装', '梁序');
+  return [
+    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-7), type: '清洁', description: '内外帐全面擦拭，通风晾干', handler: '阿岚' },
+    tent && { id: crypto.randomUUID(), gearId: tent.id, gearName: tent.name, owner: tent.owner, date: iso(-20), type: '检查', description: '检查地钉和防风绳，状态良好', handler: '阿岚' },
+    stove && { id: crypto.randomUUID(), gearId: stove.id, gearName: stove.name, owner: stove.owner, date: iso(-3), type: '补件', description: '更换了新的密封圈和点火电极', handler: '梁序' }
+  ].filter(Boolean);
+}
+
+export function createDefaultTrips(gearList, memberList) {
+  const memberNames = memberList.map((m) => m.nickname);
+  const availableGears = gearList.filter((g) => g.status === '可借');
+  if (availableGears.length === 0) return [];
+  const sampleGears = availableGears.slice(0, 2).map((g) => ({
+    gearId: g.id,
+    gearName: g.name,
+    owner: g.owner,
+    deposit: g.deposit,
+    status: '待借'
+  }));
+  return [
+    {
+      id: crypto.randomUUID(),
+      destination: '天目湖营地',
+      startDate: iso(14),
+      members: memberNames.slice(0, 3),
+      gears: sampleGears,
+      notes: '周末湖边露营，记得带驱蚊液'
+    }
+  ];
+}
+
+export function createEmptySpaceData() {
+  const members = createDefaultMembers();
+  const gears = createDefaultGears();
+  return {
+    members,
+    gears,
+    requests: createDefaultRequests(gears),
+    maintenanceRecords: createDefaultMaintenanceRecords(gears),
+    trips: createDefaultTrips(gears, members),
+    handoverRecords: [],
+    depositRecords: []
+  };
 }
 
 export function getSpaceList() {
@@ -40,13 +132,13 @@ export function getSpaceDataKey(spaceId) {
   return SPACE_DATA_PREFIX + spaceId;
 }
 
-export function getSpaceData(spaceId) {
+export function getSpaceDataRaw(spaceId) {
   const raw = localStorage.getItem(getSpaceDataKey(spaceId));
   if (!raw) return null;
   return safeParseJSON(raw, null);
 }
 
-export function setSpaceData(spaceId, data) {
+export function setSpaceDataRaw(spaceId, data) {
   localStorage.setItem(getSpaceDataKey(spaceId), JSON.stringify(data));
 }
 
@@ -58,19 +150,56 @@ export function hasOldData() {
   return OLD_KEYS.some((key) => localStorage.getItem(key) !== null);
 }
 
-export function buildExportData(spaceData, spaceInfo) {
-  return {
+export function loadSpaceData(spaceId, onError = null) {
+  try {
+    const raw = localStorage.getItem(SPACE_DATA_PREFIX + spaceId);
+    if (!raw) return createEmptySpaceData();
+    const data = safeParseJSON(raw, null);
+    if (!data || typeof data !== 'object') {
+      if (onError) onError('空间数据格式损坏，已加载空白数据。可尝试重新创建空间。');
+      return createEmptySpaceData();
+    }
+    const members = Array.isArray(data.members) ? data.members.filter((m) => m && m.nickname) : createDefaultMembers();
+    const gears = Array.isArray(data.gears) ? data.gears.filter((g) => g && g.name) : createDefaultGears();
+    const requests = normalizeRequests(data.requests, gears).data;
+    const maintenanceRecords = normalizeMaintenanceRecords(data.maintenanceRecords || [], gears).data;
+    const trips = normalizeTrips(data.trips || [], gears, members).data;
+    const handoverRecords = normalizeHandoverRecords(data.handoverRecords || [], gears, requests).data;
+    const depositRecords = normalizeDepositRecords(data.depositRecords || [], gears, requests).data;
+    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords };
+  } catch (e) {
+    if (onError) onError(`加载空间数据时出错：${e.message}。已加载空白数据。`);
+    return createEmptySpaceData();
+  }
+}
+
+export function saveSpaceData(spaceId, data) {
+  if (!spaceId || !data) return;
+  localStorage.setItem(SPACE_DATA_PREFIX + spaceId, JSON.stringify(data));
+}
+
+export function buildExportData(spaceData, spaceInfo = null) {
+  const result = {
     _exportVersion: 1,
     _exportedAt: new Date().toISOString(),
-    _spaceInfo: spaceInfo || null,
-    members: spaceData.members || [],
-    gears: spaceData.gears || [],
-    requests: spaceData.requests || [],
-    maintenanceRecords: spaceData.maintenanceRecords || [],
-    trips: spaceData.trips || [],
-    handoverRecords: spaceData.handoverRecords || [],
-    depositRecords: spaceData.depositRecords || []
+    _spaceInfo: spaceInfo
   };
+  DATA_ENTITIES.forEach((key) => {
+    if (spaceData[key] !== undefined && Array.isArray(spaceData[key])) {
+      result[key] = spaceData[key];
+    }
+  });
+  return result;
+}
+
+export function mergeImportData(targetData, importedData) {
+  const result = { ...targetData };
+  DATA_ENTITIES.forEach((key) => {
+    if (importedData[key] !== undefined) {
+      result[key] = [...importedData[key]];
+    }
+  });
+  return result;
 }
 
 export function downloadJSON(data, filename) {
@@ -92,4 +221,127 @@ export function readFileAsText(file) {
     reader.onerror = (e) => reject(e);
     reader.readAsText(file);
   });
+}
+
+export function useSpaceStorage() {
+  const spaces = ref([]);
+  const currentSpaceId = ref(null);
+  const spaceData = ref({});
+  const dataErrorWarning = ref('');
+
+  const currentSpace = computed(() =>
+    spaces.value.find((s) => s.id === currentSpaceId.value)
+  );
+
+  const currentSpaceData = computed(() => {
+    if (!currentSpaceId.value) return null;
+    return spaceData.value[currentSpaceId.value] || null;
+  });
+
+  function loadAllSpaces() {
+    spaces.value = getSpaceList();
+    currentSpaceId.value = getCurrentSpaceId();
+    if (currentSpaceId.value && spaces.value.length > 0) {
+      ensureSpaceDataLoaded(currentSpaceId.value);
+    }
+  }
+
+  function ensureSpaceDataLoaded(spaceId) {
+    if (!spaceData.value[spaceId]) {
+      spaceData.value[spaceId] = loadSpaceData(spaceId, (msg) => {
+        dataErrorWarning.value = msg;
+      });
+    }
+    return spaceData.value[spaceId];
+  }
+
+  function saveSpace(spaceId) {
+    if (!spaceId || !spaceData.value[spaceId]) return;
+    saveSpaceData(spaceId, spaceData.value[spaceId]);
+  }
+
+  function createNewSpace(name, description = '') {
+    const newSpace = {
+      id: crypto.randomUUID(),
+      name: name.trim() || '新社群空间',
+      description: description.trim(),
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+    spaces.value = [...spaces.value, newSpace];
+    setSpaceList(spaces.value);
+    spaceData.value[newSpace.id] = createEmptySpaceData();
+    saveSpace(newSpace.id);
+    return newSpace;
+  }
+
+  function deleteSpaceById(spaceId) {
+    const space = spaces.value.find((s) => s.id === spaceId);
+    if (!space) return false;
+    if (spaces.value.length <= 1) return false;
+    spaces.value = spaces.value.filter((s) => s.id !== spaceId);
+    setSpaceList(spaces.value);
+    removeSpaceData(spaceId);
+    delete spaceData.value[spaceId];
+    if (currentSpaceId.value === spaceId) {
+      switchToSpace(spaces.value[0].id);
+    }
+    return true;
+  }
+
+  function switchToSpace(spaceId) {
+    if (!spaceId || spaceId === currentSpaceId.value) return;
+    currentSpaceId.value = spaceId;
+    setCurrentSpaceId(spaceId);
+    ensureSpaceDataLoaded(spaceId);
+    dataErrorWarning.value = '';
+  }
+
+  function resetSpace(spaceId) {
+    spaceData.value[spaceId] = createEmptySpaceData();
+    saveSpace(spaceId);
+  }
+
+  function importIntoSpace(spaceId, importedData) {
+    if (!spaceId || !importedData || typeof importedData !== 'object') return false;
+    const current = spaceData.value[spaceId];
+    if (!current) return false;
+    DATA_ENTITIES.forEach((key) => {
+      if (importedData[key] !== undefined) {
+        current[key] = [...importedData[key]];
+      }
+    });
+    saveSpace(spaceId);
+    return true;
+  }
+
+  function exportFromSpace(spaceId, selectedEntities = null) {
+    const data = spaceData.value[spaceId];
+    if (!data) return null;
+    const exportData = {};
+    const entities = selectedEntities || DATA_ENTITIES;
+    entities.forEach((key) => {
+      if (data[key] !== undefined) {
+        exportData[key] = data[key];
+      }
+    });
+    return buildExportData(exportData, currentSpace.value);
+  }
+
+  return {
+    spaces,
+    currentSpaceId,
+    spaceData,
+    dataErrorWarning,
+    currentSpace,
+    currentSpaceData,
+    loadAllSpaces,
+    ensureSpaceDataLoaded,
+    saveSpace,
+    createNewSpace,
+    deleteSpaceById,
+    switchToSpace,
+    resetSpace,
+    importIntoSpace,
+    exportFromSpace
+  };
 }

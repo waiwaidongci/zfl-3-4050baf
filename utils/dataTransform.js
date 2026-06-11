@@ -256,13 +256,23 @@ export function validateAndNormalizeImportData(rawData) {
 
   if (!rawData || typeof rawData !== 'object') {
     errors.push('导入文件格式错误：根数据不是对象');
-    return { valid: false, errors, warnings: allWarnings, data: null };
+    return { valid: false, errors, warnings: allWarnings, data: null, summary: {} };
   }
 
   const isLegacyFormat = !rawData._exportVersion && (
-    rawData.members || rawData.gears || rawData.requests ||
-    rawData.maintenance || rawData.trips || rawData.handovers || rawData.deposits
+    rawData.members !== undefined || rawData.gears !== undefined || rawData.requests !== undefined ||
+    rawData.maintenance !== undefined || rawData.trips !== undefined || rawData.handovers !== undefined || rawData.deposits !== undefined
   );
+
+  const entityPresence = {
+    members: rawData.members !== undefined,
+    gears: rawData.gears !== undefined,
+    requests: rawData.requests !== undefined,
+    maintenanceRecords: rawData.maintenanceRecords !== undefined || rawData.maintenance !== undefined,
+    trips: rawData.trips !== undefined,
+    handoverRecords: rawData.handoverRecords !== undefined || rawData.handovers !== undefined,
+    depositRecords: rawData.depositRecords !== undefined || rawData.deposits !== undefined
+  };
 
   const source = {
     members: rawData.members || [],
@@ -278,48 +288,62 @@ export function validateAndNormalizeImportData(rawData) {
     allWarnings.push('检测到旧版数据格式，已自动兼容');
   }
 
+  const normalizedData = {};
+  const summary = {
+    totalWarnings: 0,
+    hasLegacyFormat: isLegacyFormat
+  };
+
   const membersResult = normalizeMembers(source.members);
   allWarnings.push(...membersResult.warnings);
+  if (entityPresence.members) {
+    normalizedData.members = membersResult.data;
+    summary.members = membersResult.data.length;
+  }
 
   const gearsResult = normalizeGears(source.gears);
   allWarnings.push(...gearsResult.warnings);
+  if (entityPresence.gears) {
+    normalizedData.gears = gearsResult.data;
+    summary.gears = gearsResult.data.length;
+  }
 
   const requestsResult = normalizeRequests(source.requests, gearsResult.data);
   allWarnings.push(...requestsResult.warnings);
+  if (entityPresence.requests) {
+    normalizedData.requests = requestsResult.data;
+    summary.requests = requestsResult.data.length;
+  }
 
   const maintenanceResult = normalizeMaintenanceRecords(source.maintenanceRecords, gearsResult.data);
   allWarnings.push(...maintenanceResult.warnings);
+  if (entityPresence.maintenanceRecords) {
+    normalizedData.maintenanceRecords = maintenanceResult.data;
+    summary.maintenanceRecords = maintenanceResult.data.length;
+  }
 
   const tripsResult = normalizeTrips(source.trips, gearsResult.data, membersResult.data);
   allWarnings.push(...tripsResult.warnings);
+  if (entityPresence.trips) {
+    normalizedData.trips = tripsResult.data;
+    summary.trips = tripsResult.data.length;
+  }
 
   const handoverResult = normalizeHandoverRecords(source.handoverRecords, gearsResult.data, requestsResult.data);
   allWarnings.push(...handoverResult.warnings);
+  if (entityPresence.handoverRecords) {
+    normalizedData.handoverRecords = handoverResult.data;
+    summary.handoverRecords = handoverResult.data.length;
+  }
 
   const depositResult = normalizeDepositRecords(source.depositRecords, gearsResult.data, requestsResult.data);
   allWarnings.push(...depositResult.warnings);
+  if (entityPresence.depositRecords) {
+    normalizedData.depositRecords = depositResult.data;
+    summary.depositRecords = depositResult.data.length;
+  }
 
-  const normalizedData = {
-    members: membersResult.data,
-    gears: gearsResult.data,
-    requests: requestsResult.data,
-    maintenanceRecords: maintenanceResult.data,
-    trips: tripsResult.data,
-    handoverRecords: handoverResult.data,
-    depositRecords: depositResult.data
-  };
-
-  const summary = {
-    members: membersResult.data.length,
-    gears: gearsResult.data.length,
-    requests: requestsResult.data.length,
-    maintenanceRecords: maintenanceResult.data.length,
-    trips: tripsResult.data.length,
-    handoverRecords: handoverResult.data.length,
-    depositRecords: depositResult.data.length,
-    totalWarnings: allWarnings.length,
-    hasLegacyFormat: isLegacyFormat
-  };
+  summary.totalWarnings = allWarnings.length;
 
   return {
     valid: errors.length === 0,
