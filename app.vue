@@ -43,6 +43,18 @@ const calendarWeekStart = ref(iso(0));
 const conflictWarning = ref('');
 const conflictDetails = ref([]);
 
+const sceneOptions = ['湖畔露营', '山地露营', '家庭亲子', '徒步露营', '沙滩露营', '冬季露营'];
+const recommendScene = ref('湖畔露营');
+const recommendPeople = ref(2);
+const recommendDays = ref(2);
+const recommendationResult = ref({});
+const gapList = ref([]);
+const hasRecommended = ref(false);
+const selectedRecommendGears = ref([]);
+const recommendBorrower = ref(currentUser.value);
+const recommendStart = ref(iso(2));
+const recommendEnd = ref(iso(4));
+
 const gears = ref([
   { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: '阿岚', available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
   { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: '梁序', available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '' },
@@ -1095,6 +1107,165 @@ function deleteMaintenance(id) {
   if (!confirm('确定删除该保养记录？')) return;
   maintenanceRecords.value = maintenanceRecords.value.filter((r) => r.id !== id);
 }
+
+const recommendCategories = ['帐篷天幕', '炊具', '照明', '桌椅收纳', '安全急救'];
+
+function getCategoryRequirements(scene, people, days) {
+  const tentCount = Math.ceil(people / 3);
+  const lightCount = Math.max(1, Math.ceil(people / 2));
+  const tableCount = Math.ceil(people / 4);
+  const chairCount = people;
+  const cookingCount = Math.max(1, Math.ceil(people / 3));
+  const firstAidCount = 1;
+  const storageCount = Math.max(1, Math.ceil(people / 3));
+
+  const base = {
+    '帐篷天幕': tentCount,
+    '炊具': cookingCount,
+    '照明': lightCount,
+    '桌椅收纳': tableCount + chairCount + storageCount,
+    '安全急救': firstAidCount
+  };
+
+  if (scene === '山地露营' || scene === '徒步露营') {
+    base['安全急救'] = Math.max(2, firstAidCount + 1);
+  }
+  if (scene === '家庭亲子') {
+    base['桌椅收纳'] += 2;
+    base['安全急救'] += 1;
+  }
+  if (scene === '沙滩露营') {
+    base['帐篷天幕'] += 1;
+    base['照明'] += 1;
+  }
+  if (scene === '冬季露营') {
+    base['炊具'] += 1;
+    base['照明'] += 1;
+  }
+  if (days >= 3) {
+    base['炊具'] += 1;
+    base['照明'] += 1;
+  }
+  if (people >= 5) {
+    base['桌椅收纳'] += 2;
+  }
+
+  return base;
+}
+
+function generateRecommendation() {
+  const availableGears = gears.value.filter((g) => g.status === '可借');
+  const requirements = getCategoryRequirements(recommendScene.value, recommendPeople.value, recommendDays.value);
+  const result = {};
+  const gaps = [];
+
+  for (const category of recommendCategories) {
+    const needed = requirements[category] || 0;
+    const categoryGears = availableGears.filter((g) => g.category === category);
+    const recommended = categoryGears.slice(0, needed);
+    const shortfall = needed - recommended.length;
+
+    result[category] = {
+      needed,
+      available: categoryGears.length,
+      recommended,
+      shortfall
+    };
+
+    if (shortfall > 0) {
+      gaps.push({
+        category,
+        needed,
+        available: categoryGears.length,
+        shortfall
+      });
+    }
+  }
+
+  recommendationResult.value = result;
+  gapList.value = gaps;
+  hasRecommended.value = true;
+  selectedRecommendGears.value = [];
+
+  for (const category of recommendCategories) {
+    for (const gear of result[category].recommended) {
+      selectedRecommendGears.value.push(gear.id);
+    }
+  }
+}
+
+function isRecommendGearSelected(gearId) {
+  return selectedRecommendGears.value.includes(gearId);
+}
+
+function toggleRecommendGearSelection(gearId) {
+  const idx = selectedRecommendGears.value.findIndex((id) => id === gearId);
+  if (idx > -1) {
+    selectedRecommendGears.value.splice(idx, 1);
+  } else {
+    selectedRecommendGears.value.push(gearId);
+  }
+}
+
+function getSelectedRecommendGearsCount() {
+  return selectedRecommendGears.value.length;
+}
+
+function addRecommendationToRequests() {
+  if (selectedRecommendGears.value.length === 0) {
+    alert('请至少选择一件装备');
+    return;
+  }
+  if (!recommendBorrower.value) {
+    alert('请选择借用人');
+    return;
+  }
+  if (!recommendStart.value || !recommendEnd.value) {
+    alert('请选择借用起止日期');
+    return;
+  }
+  if (new Date(recommendEnd.value) < new Date(recommendStart.value)) {
+    alert('归还日期不能早于借用日期');
+    return;
+  }
+
+  let addedCount = 0;
+  for (const gearId of selectedRecommendGears.value) {
+    const gear = gears.value.find((g) => g.id === gearId);
+    if (!gear || gear.status !== '可借') continue;
+
+    const conflicts = findConflictingRequests(gear.id, recommendStart.value, recommendEnd.value);
+    if (conflicts.length > 0) {
+      alert(`装备「${gear.name}」在所选日期范围内存在冲突，已跳过`);
+      continue;
+    }
+
+    requests.value = [{
+      id: crypto.randomUUID(),
+      gearId: gear.id,
+      gearName: gear.name,
+      owner: gear.owner,
+      borrower: recommendBorrower.value,
+      start: recommendStart.value,
+      end: recommendEnd.value,
+      status: '待处理',
+      damage: '',
+      reason: `${recommendScene.value}·${recommendPeople.value}人·${recommendDays.value}天 套装推荐`
+    }, ...requests.value];
+    addedCount++;
+  }
+
+  if (addedCount > 0) {
+    alert(`已成功添加 ${addedCount} 条借用申请草稿`);
+    tab.value = '申请列表';
+  } else {
+    alert('没有可添加的装备');
+  }
+}
+
+watch(currentUser, (newVal) => {
+  recommendBorrower.value = newVal;
+});
 </script>
 
 <template>
@@ -1113,7 +1284,7 @@ function deleteMaintenance(id) {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -1172,6 +1343,95 @@ function deleteMaintenance(id) {
               </div>
             </div>
           </article>
+        </div>
+      </div>
+    </section>
+
+    <section v-if="tab === '装备推荐'" class="layout">
+      <form class="panel" @submit.prevent="generateRecommendation">
+        <h2>套装推荐条件</h2>
+        <label class="muted">露营场景</label>
+        <select v-model="recommendScene">
+          <option v-for="scene in sceneOptions" :key="scene">{{ scene }}</option>
+        </select>
+        <label class="muted">参与人数</label>
+        <input v-model.number="recommendPeople" type="number" min="1" max="20" />
+        <label class="muted">露营天数</label>
+        <input v-model.number="recommendDays" type="number" min="1" max="30" />
+        <label class="muted">借用人</label>
+        <select v-model="recommendBorrower">
+          <option v-for="member in members" :key="member.id">{{ member.nickname }}</option>
+        </select>
+        <label class="muted">借用起止日期</label>
+        <div class="split">
+          <input v-model="recommendStart" type="date" />
+          <input v-model="recommendEnd" type="date" />
+        </div>
+        <button>生成推荐</button>
+        <small class="muted">系统将根据场景、人数、天数智能推荐装备，并自动避开借出中装备。</small>
+      </form>
+
+      <div class="panel wide">
+        <div v-if="!hasRecommended" class="recommend-empty">
+          <div class="recommend-empty-icon">🏕</div>
+          <h3>还没有生成推荐</h3>
+          <p class="muted">填写左侧的露营条件，点击「生成推荐」按钮，系统将为你匹配最合适的装备套装。</p>
+        </div>
+
+        <div v-else>
+          <div class="toolbar">
+            <h2>推荐结果</h2>
+            <div class="recommend-summary">
+              <span class="muted">已选 {{ getSelectedRecommendGearsCount() }} 件</span>
+              <button class="ghost small" @click="generateRecommendation">重新推荐</button>
+              <button @click="addRecommendationToRequests" :disabled="getSelectedRecommendGearsCount() === 0">一键带入申请</button>
+            </div>
+          </div>
+
+          <div v-if="gapList.length > 0" class="gap-section">
+            <div class="gap-header">
+              <strong>⚠️ 缺口清单</strong>
+              <span class="muted">以下分类装备数量不足，请提前准备或外购</span>
+            </div>
+            <div class="gap-list">
+              <div v-for="gap in gapList" :key="gap.category" class="gap-item">
+                <span class="gap-category">{{ gap.category }}</span>
+                <span class="gap-detail">需要 {{ gap.needed }} 件，现有可用 {{ gap.available }} 件，缺 {{ gap.shortfall }} 件</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="recommend-categories">
+            <div v-for="category in recommendCategories" :key="category" class="recommend-category">
+              <div class="recommend-category-header">
+                <h3>{{ category }}</h3>
+                <span class="category-meta">
+                  需要 {{ recommendationResult[category]?.needed || 0 }} 件 ·
+                  可用 {{ recommendationResult[category]?.available || 0 }} 件 ·
+                  已选 {{ recommendationResult[category]?.recommended?.filter(g => isRecommendGearSelected(g.id))?.length || 0 }} 件
+                </span>
+              </div>
+
+              <div v-if="recommendationResult[category]?.recommended?.length === 0" class="muted no-gear-warning">
+                该分类暂无可用装备
+              </div>
+
+              <div v-else class="recommend-gear-list">
+                <label
+                  v-for="gear in recommendationResult[category].recommended"
+                  :key="gear.id"
+                  :class="['recommend-gear-item', { selected: isRecommendGearSelected(gear.id) }]"
+                >
+                  <input type="checkbox" :checked="isRecommendGearSelected(gear.id)" @change="toggleRecommendGearSelection(gear.id)" />
+                  <div class="gear-info">
+                    <span class="gear-name">{{ gear.name }}</span>
+                    <span class="gear-meta">装备主人：{{ gear.owner }} · 押金：¥{{ gear.deposit }}</span>
+                    <span v-if="gear.notes" class="gear-notes">{{ gear.notes }}</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -2029,7 +2289,38 @@ article span { margin-top: 5px; }
 .deposit-notes { margin: 6px 0 0; font-size: 13px; color: #63705d; }
 .deposit-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 
-@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: stretch; gap: 10px; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; }
+.recommend-empty { padding: 60px 20px; text-align: center; }
+.recommend-empty-icon { font-size: 64px; margin-bottom: 16px; }
+.recommend-empty h3 { margin: 0 0 8px; color: #2f4a2c; }
+.recommend-summary { display: flex; gap: 10px; align-items: center; }
+.recommend-summary button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.gap-section { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+.gap-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; color: #991b1b; }
+.gap-header strong { font-size: 15px; }
+.gap-list { display: flex; flex-direction: column; gap: 8px; }
+.gap-item { background: #fff; border-radius: 6px; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; }
+.gap-category { font-weight: 600; color: #991b1b; }
+.gap-detail { font-size: 13px; color: #63705d; }
+
+.recommend-categories { display: flex; flex-direction: column; gap: 20px; }
+.recommend-category { background: #f6f8f2; border-radius: 8px; padding: 16px; }
+.recommend-category-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.recommend-category-header h3 { margin: 0; font-size: 16px; color: #2f4a2c; }
+.category-meta { font-size: 13px; color: #63705d; }
+.no-gear-warning { padding: 12px; background: #fff; border-radius: 6px; text-align: center; border: 1px dashed #cfd8ca; }
+
+.recommend-gear-list { display: flex; flex-direction: column; gap: 8px; }
+.recommend-gear-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: #fff; border: 2px solid transparent; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
+.recommend-gear-item:hover { background: #fafbf7; border-color: #cfd8ca; }
+.recommend-gear-item.selected { background: #f0fdf4; border-color: #22c55e; }
+.recommend-gear-item input { width: auto; margin-top: 4px; }
+.recommend-gear-item .gear-info { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.recommend-gear-item .gear-name { font-weight: 600; color: #22251f; }
+.recommend-gear-item .gear-meta { font-size: 12px; color: #63705d; }
+.recommend-gear-item .gear-notes { font-size: 12px; color: #84704f; font-style: italic; }
+
+@media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar, .recommend-summary, .gap-header, .recommend-category-header, .gap-item { flex-direction: column; align-items: stretch; gap: 10px; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; }
   .deposit-summary { grid-template-columns: repeat(2, 1fr); }
   .deposit-list { grid-template-columns: 1fr; }
   .deposit-amounts { grid-template-columns: repeat(2, 1fr); }
