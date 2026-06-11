@@ -12,17 +12,25 @@ function daysAgo(dateStr) {
   return daysBetween(dateStr, new Date().toISOString().slice(0, 10));
 }
 
-function buildBorrowerHistory(requests, handovers) {
+function getCompletedBorrowHandovers(handovers) {
+  return handovers.filter(
+    (h) => h.type === '借出' && h.ownerConfirmed && h.borrowerConfirmed
+  );
+}
+
+function buildBorrowerHistory(completedHandovers, requests) {
   const map = new Map();
-  requests.forEach((req) => {
-    if (!req.borrower) return;
-    if (!map.has(req.borrower)) {
-      map.set(req.borrower, { name: req.borrower, count: 0, lastDate: null });
+  completedHandovers.forEach((h) => {
+    if (!h.borrower) return;
+    const req = requests.find((r) => r.id === h.requestId);
+    if (!map.has(h.borrower)) {
+      map.set(h.borrower, { name: h.borrower, count: 0, lastDate: null });
     }
-    const entry = map.get(req.borrower);
+    const entry = map.get(h.borrower);
     entry.count += 1;
-    if (!entry.lastDate || (req.end && req.end > entry.lastDate)) {
-      entry.lastDate = req.end || req.start;
+    const date = req ? (req.end || req.start) : h.createdAt;
+    if (!entry.lastDate || (date && date > entry.lastDate)) {
+      entry.lastDate = date;
     }
   });
   return Array.from(map.values()).sort((a, b) => {
@@ -227,7 +235,11 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
     return list.filter((d) => d.gearId === id);
   });
 
-  const borrowCount = computed(() => relatedRequests.value.length);
+  const completedBorrowHandovers = computed(() =>
+    getCompletedBorrowHandovers(relatedHandovers.value)
+  );
+
+  const borrowCount = computed(() => completedBorrowHandovers.value.length);
 
   const activeBorrow = computed(() =>
     relatedRequests.value.find((r) => r.status === '已同意' || r.status === '借出中') || null
@@ -260,7 +272,7 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
   );
 
   const borrowerHistory = computed(() =>
-    buildBorrowerHistory(relatedRequests.value, relatedHandovers.value)
+    buildBorrowerHistory(completedBorrowHandovers.value, relatedRequests.value)
   );
 
   const timeline = computed(() =>
