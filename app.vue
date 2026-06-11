@@ -432,6 +432,9 @@ function openReturnHandoverModal(requestId) {
 function saveHandover() {
   if (!handoverForm.value.gearId) return;
 
+  const depositCheck = validateAmount(handoverForm.value.deposit);
+  if (!depositCheck.valid) { alert(`押金金额：${depositCheck.message}`); return; }
+
   if (handoverForm.value.type === '归还') {
     if (handoverForm.value.deductAmount !== '' && handoverForm.value.deductAmount !== null) {
       const dedCheck = validateAmount(handoverForm.value.deductAmount);
@@ -492,15 +495,23 @@ function checkHandoverCompletion(requestId) {
     }
     const deposit = getDepositByRequest(requestId);
     if (deposit) {
-      const receivedAmt = borrowHandover.deposit !== '' && borrowHandover.deposit !== null
-        ? String(Number(borrowHandover.deposit) || 0)
-        : deposit.depositAmount;
+      const depositCheck = validateAmount(borrowHandover.deposit);
+      if (!depositCheck.valid) {
+        alert(`押金金额校验失败：${depositCheck.message}`);
+        return;
+      }
+      const receivedAmt = String(Number(borrowHandover.deposit) || 0);
+      const depositAmt = deposit.depositAmount || receivedAmt;
+      if (Number(receivedAmt) !== Number(depositAmt)) {
+        alert('已收金额必须等于押金金额');
+        return;
+      }
       depositRecords.value = depositRecords.value.map((d) =>
         d.id === deposit.id
           ? {
               ...d,
               receivedAmount: receivedAmt,
-              depositAmount: deposit.depositAmount || receivedAmt,
+              depositAmount: depositAmt,
               updatedAt: new Date().toISOString().slice(0, 10)
             }
           : d
