@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import DataImportExport from './components/DataImportExport.vue';
+import EquipmentHealthProfile from './components/EquipmentHealthProfile.vue';
 import {
   safeParseJSON,
   SPACE_LIST_KEY,
@@ -528,6 +529,8 @@ const depositRecords = computed({
 });
 
 const currentUser = ref('阿岚');
+const showHealthProfile = ref(false);
+const currentHealthGearId = ref('');
 const tab = ref('装备库');
 const category = ref('全部分类');
 const requestFilter = ref('全部申请');
@@ -1698,6 +1701,16 @@ function dismissMigrationWarning() {
 function dismissDataErrorWarning() {
   dataErrorWarning.value = '';
 }
+
+function openHealthProfile(gearId) {
+  currentHealthGearId.value = gearId;
+  showHealthProfile.value = true;
+}
+
+function closeHealthProfile() {
+  showHealthProfile.value = false;
+  currentHealthGearId.value = '';
+}
 </script>
 
 <template>
@@ -1808,7 +1821,7 @@ function dismissDataErrorWarning() {
           </select>
         </div>
         <div class="cards">
-          <article v-for="gear in filteredGears" :key="gear.id">
+          <article v-for="gear in filteredGears" :key="gear.id" class="gear-card">
             <strong>{{ gear.name }}</strong>
             <span>{{ gear.category }} · {{ gear.owner }}</span>
             <p>{{ gear.status }} · 可借日期{{ gear.available }} · 押金{{ gear.deposit }}</p>
@@ -1820,6 +1833,13 @@ function dismissDataErrorWarning() {
                 {{ lastMaintenanceByGear[gear.id].description }}
               </div>
             </div>
+            <button
+              class="ghost small health-profile-btn"
+              style="margin-top: 10px; width: 100%;"
+              @click="openHealthProfile(gear.id)"
+            >
+              📋 查看装备健康档案
+            </button>
           </article>
         </div>
       </div>
@@ -2410,5 +2430,81 @@ function dismissDataErrorWarning() {
       :spaceInfo="currentSpace"
       @imported="handleDataImported"
     />
+
+    <div v-if="showHealthProfile" class="health-modal-overlay" @click.self="closeHealthProfile">
+      <div class="health-modal-container">
+        <EquipmentHealthProfile
+          :gearId="currentHealthGearId"
+          :gears="gears"
+          :requests="requests"
+          :handovers="handoverRecords"
+          :maintenanceRecords="maintenanceRecords"
+          :depositRecords="depositRecords"
+          @close="closeHealthProfile"
+        />
+      </div>
+    </div>
   </main>
 </template>
+
+<style>
+.health-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(42, 38, 30, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.health-modal-container {
+  width: 100%;
+  max-width: 1000px;
+  animation: slideUp 0.3s ease;
+  margin-bottom: 40px;
+}
+
+.gear-card {
+  position: relative;
+}
+
+.health-profile-btn {
+  background: linear-gradient(135deg, #f0efe8, #e6e4d8);
+  border: 1px solid #d4d0c4;
+  color: #4a4638;
+  transition: all 0.15s ease;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.health-profile-btn:hover {
+  background: linear-gradient(135deg, #e6e4d8, #dcd8c8);
+  border-color: #c4bfae;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(60, 50, 30, 0.08);
+}
+</style>
