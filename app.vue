@@ -123,11 +123,203 @@ const handoverForm = ref({
   accessories: '',
   handoverNotes: '',
   damageRecord: '',
+  deductAmount: '',
+  deductReason: '',
   ownerConfirmed: false,
   borrowerConfirmed: false
 });
 
 const handoverRecords = ref([]);
+
+const depositStatusList = ['全部状态', '待收取', '已收取', '部分扣除', '已扣除', '已退还', '异常'];
+const depositFilter = ref('全部状态');
+const depositMemberFilter = ref('全部成员');
+const depositGearFilter = ref('全部装备');
+const depositRecords = ref([]);
+const showDepositModal = ref(false);
+const depositModalMode = ref('');
+const currentDepositId = ref(null);
+const depositForm = ref({
+  requestId: '',
+  gearId: '',
+  gearName: '',
+  owner: '',
+  borrower: '',
+  depositAmount: '',
+  receivedAmount: '',
+  deductedAmount: '',
+  refundedAmount: '',
+  deductReason: '',
+  status: '待收取',
+  notes: ''
+});
+
+function validateAmount(value, allowZero = true) {
+  if (value === '' || value === null || value === undefined) return { valid: false, message: '金额不能为空' };
+  const num = Number(value);
+  if (isNaN(num)) return { valid: false, message: '请输入有效的数字' };
+  if (num < 0) return { valid: false, message: '金额不能为负数' };
+  if (!allowZero && num === 0) return { valid: false, message: '金额不能为零' };
+  return { valid: true, message: '', amount: num };
+}
+
+function normalizeDepositRecords(records, gearList = gears.value, requestList = requests.value) {
+  return records.map((record) => {
+    const gear = gearList.find((g) => g.id === record.gearId)
+      || gearList.find((g) => g.name === record.gearName && g.owner === record.owner);
+    const req = requestList.find((r) => r.id === record.requestId);
+    return {
+      id: record.id || crypto.randomUUID(),
+      requestId: record.requestId || (req ? req.id : ''),
+      gearId: gear ? gear.id : (record.gearId || ''),
+      gearName: gear ? gear.name : (record.gearName || (req ? req.gearName : '未知装备')),
+      owner: gear ? gear.owner : (record.owner || (req ? req.owner : '')),
+      borrower: record.borrower || (req ? req.borrower : ''),
+      depositAmount: record.depositAmount !== undefined ? String(record.depositAmount) : (gear ? gear.deposit : '0'),
+      receivedAmount: record.receivedAmount !== undefined ? String(record.receivedAmount) : '0',
+      deductedAmount: record.deductedAmount !== undefined ? String(record.deductedAmount) : '0',
+      refundedAmount: record.refundedAmount !== undefined ? String(record.refundedAmount) : '0',
+      deductReason: record.deductReason || '',
+      status: record.status || '待收取',
+      notes: record.notes || '',
+      createdAt: record.createdAt || new Date().toISOString().slice(0, 10),
+      updatedAt: record.updatedAt || new Date().toISOString().slice(0, 10)
+    };
+  });
+}
+
+function createDepositRecord(requestId) {
+  const req = requests.value.find((r) => r.id === requestId);
+  if (!req) return null;
+  const gear = gears.value.find((g) => g.id === req.gearId);
+  return {
+    id: crypto.randomUUID(),
+    requestId: req.id,
+    gearId: req.gearId,
+    gearName: req.gearName,
+    owner: req.owner,
+    borrower: req.borrower,
+    depositAmount: gear ? gear.deposit : '0',
+    receivedAmount: '0',
+    deductedAmount: '0',
+    refundedAmount: '0',
+    deductReason: '',
+    status: '待收取',
+    notes: '',
+    createdAt: new Date().toISOString().slice(0, 10),
+    updatedAt: new Date().toISOString().slice(0, 10)
+  };
+}
+
+function getDepositByRequest(requestId) {
+  return depositRecords.value.find((d) => d.requestId === requestId);
+}
+
+function recalcDepositStatus(deposit) {
+  const d = Number(deposit.depositAmount) || 0;
+  const r = Number(deposit.receivedAmount) || 0;
+  const ded = Number(deposit.deductedAmount) || 0;
+  const ref = Number(deposit.refundedAmount) || 0;
+
+  if (r === 0) return '待收取';
+  if (r < d) return '异常';
+  if (ded > 0 && ref > 0 && ded + ref === r) return ded < d ? '部分扣除' : '已扣除';
+  if (ded > 0 && ref === 0 && ded === r) return ded < d ? '部分扣除' : '已扣除';
+  if (ref > 0 && ded === 0 && ref === r) return '已退还';
+  if (r === d && ded === 0 && ref === 0) return '已收取';
+  if (ded + ref > r) return '异常';
+  return '异常';
+}
+
+function updateDepositStatus(recordId) {
+  const idx = depositRecords.value.findIndex((d) => d.id === recordId);
+  if (idx === -1) return;
+  const record = depositRecords.value[idx];
+  const newStatus = recalcDepositStatus(record);
+  if (record.status !== newStatus) {
+    depositRecords.value[idx] = { ...record, status: newStatus, updatedAt: new Date().toISOString().slice(0, 10) };
+  }
+}
+
+function openDepositModal(depositId, mode = 'view') {
+  const deposit = depositRecords.value.find((d) => d.id === depositId);
+  if (!deposit) return;
+  depositForm.value = { ...deposit };
+  currentDepositId.value = depositId;
+  depositModalMode.value = mode;
+  showDepositModal.value = true;
+}
+
+function closeDepositModal() {
+  showDepositModal.value = false;
+  depositForm.value = {
+    requestId: '',
+    gearId: '',
+    gearName: '',
+    owner: '',
+    borrower: '',
+    depositAmount: '',
+    receivedAmount: '',
+    deductedAmount: '',
+    refundedAmount: '',
+    deductReason: '',
+    status: '待收取',
+    notes: ''
+  };
+  currentDepositId.value = null;
+}
+
+function saveDepositRecord() {
+  if (!currentDepositId.value) return;
+
+  const depositCheck = validateAmount(depositForm.value.depositAmount);
+  if (!depositCheck.valid) { alert(`押金金额：${depositCheck.message}`); return; }
+
+  const receivedCheck = validateAmount(depositForm.value.receivedAmount);
+  if (!receivedCheck.valid) { alert(`已收金额：${receivedCheck.message}`); return; }
+
+  const dedCheck = validateAmount(depositForm.value.deductedAmount);
+  if (!dedCheck.valid) { alert(`扣除金额：${dedCheck.message}`); return; }
+
+  const refCheck = validateAmount(depositForm.value.refundedAmount);
+  if (!refCheck.valid) { alert(`退还金额：${refCheck.message}`); return; }
+
+  if (Number(depositForm.value.deductedAmount) > Number(depositForm.value.depositAmount)) {
+    alert('扣除金额不能大于押金金额');
+    return;
+  }
+  if (Number(depositForm.value.deductedAmount) + Number(depositForm.value.refundedAmount) > Number(depositForm.value.receivedAmount)) {
+    alert('扣除金额与退还金额之和不能大于已收金额');
+    return;
+  }
+
+  depositRecords.value = depositRecords.value.map((d) =>
+    d.id === currentDepositId.value
+      ? { ...depositForm.value, id: d.id, createdAt: d.createdAt, updatedAt: new Date().toISOString().slice(0, 10) }
+      : d
+  );
+  updateDepositStatus(currentDepositId.value);
+  closeDepositModal();
+}
+
+const depositGearOptions = computed(() => ['全部装备', ...new Set(depositRecords.value.map((r) => r.gearName).filter(Boolean))]);
+const depositMemberOptions = computed(() => ['全部成员', ...members.value.map((m) => m.nickname)]);
+
+const filteredDeposits = computed(() => {
+  return depositRecords.value.filter((d) => {
+    const statusMatch = depositFilter.value === '全部状态' || d.status === depositFilter.value;
+    const memberMatch = depositMemberFilter.value === '全部成员'
+      || d.borrower === depositMemberFilter.value
+      || d.owner === depositMemberFilter.value;
+    const gearMatch = depositGearFilter.value === '全部装备' || d.gearName === depositGearFilter.value;
+    return statusMatch && memberMatch && gearMatch;
+  });
+});
+
+const depositCount = computed(() => depositRecords.value.length);
+const pendingDepositCount = computed(() => depositRecords.value.filter((d) => d.status === '待收取').length);
+const totalDepositReceived = computed(() => depositRecords.value.reduce((sum, d) => sum + (Number(d.receivedAmount) || 0), 0));
+const totalDepositDeducted = computed(() => depositRecords.value.reduce((sum, d) => sum + (Number(d.deductedAmount) || 0), 0));
 
 function normalizeHandoverRecords(records, gearList = gears.value, requestList = requests.value) {
   return records.map((record) => {
@@ -147,6 +339,8 @@ function normalizeHandoverRecords(records, gearList = gears.value, requestList =
       accessories: record.accessories || '',
       handoverNotes: record.handoverNotes || '',
       damageRecord: record.damageRecord || '',
+      deductAmount: record.deductAmount !== undefined ? record.deductAmount : '',
+      deductReason: record.deductReason || '',
       ownerConfirmed: !!record.ownerConfirmed,
       borrowerConfirmed: !!record.borrowerConfirmed,
       createdAt: record.createdAt || new Date().toISOString().slice(0, 10)
@@ -171,6 +365,8 @@ function createBorrowHandover(requestId) {
     accessories: '',
     handoverNotes: '',
     damageRecord: '',
+    deductAmount: '',
+    deductReason: '',
     ownerConfirmed: false,
     borrowerConfirmed: false,
     createdAt: new Date().toISOString().slice(0, 10)
@@ -195,6 +391,8 @@ function createReturnHandover(requestId) {
     accessories: borrowHandover ? borrowHandover.accessories : '',
     handoverNotes: '',
     damageRecord: '',
+    deductAmount: '',
+    deductReason: '',
     ownerConfirmed: false,
     borrowerConfirmed: false,
     createdAt: new Date().toISOString().slice(0, 10)
@@ -233,6 +431,19 @@ function openReturnHandoverModal(requestId) {
 
 function saveHandover() {
   if (!handoverForm.value.gearId) return;
+
+  if (handoverForm.value.type === '归还') {
+    if (handoverForm.value.deductAmount !== '' && handoverForm.value.deductAmount !== null) {
+      const dedCheck = validateAmount(handoverForm.value.deductAmount);
+      if (!dedCheck.valid) { alert(`扣除金额：${dedCheck.message}`); return; }
+      const depositAmt = Number(handoverForm.value.deposit) || 0;
+      if (Number(handoverForm.value.deductAmount) > depositAmt) {
+        alert('扣除金额不能大于押金金额');
+        return;
+      }
+    }
+  }
+
   if (currentHandoverId.value) {
     handoverRecords.value = handoverRecords.value.map((h) =>
       h.id === currentHandoverId.value ? { ...handoverForm.value } : h
@@ -242,6 +453,31 @@ function saveHandover() {
     handoverRecords.value = [newRecord, ...handoverRecords.value];
     currentHandoverId.value = newRecord.id;
   }
+
+  if (handoverForm.value.type === '归还' && handoverForm.value.requestId) {
+    const deposit = getDepositByRequest(handoverForm.value.requestId);
+    if (deposit) {
+      const dedAmt = handoverForm.value.deductAmount !== '' && handoverForm.value.deductAmount !== null
+        ? String(Number(handoverForm.value.deductAmount) || 0)
+        : deposit.deductedAmount;
+      const receivedAmt = Number(deposit.receivedAmount) || 0;
+      const dedNum = Number(dedAmt) || 0;
+      const refundAmt = receivedAmt - dedNum >= 0 ? String(receivedAmt - dedNum) : deposit.refundedAmount;
+      depositRecords.value = depositRecords.value.map((d) =>
+        d.id === deposit.id
+          ? {
+              ...d,
+              deductedAmount: dedAmt,
+              deductReason: handoverForm.value.deductReason || d.deductReason,
+              refundedAmount: refundAmt,
+              updatedAt: new Date().toISOString().slice(0, 10)
+            }
+          : d
+      );
+      updateDepositStatus(deposit.id);
+    }
+  }
+
   checkHandoverCompletion(handoverForm.value.requestId);
 }
 
@@ -253,6 +489,23 @@ function checkHandoverCompletion(requestId) {
     const req = requests.value.find((r) => r.id === requestId);
     if (req && req.status === '已同意') {
       gears.value = gears.value.map((gear) => gear.id === req.gearId ? { ...gear, status: '借出中' } : gear);
+    }
+    const deposit = getDepositByRequest(requestId);
+    if (deposit) {
+      const receivedAmt = borrowHandover.deposit !== '' && borrowHandover.deposit !== null
+        ? String(Number(borrowHandover.deposit) || 0)
+        : deposit.depositAmount;
+      depositRecords.value = depositRecords.value.map((d) =>
+        d.id === deposit.id
+          ? {
+              ...d,
+              receivedAmount: receivedAmt,
+              depositAmount: deposit.depositAmount || receivedAmt,
+              updatedAt: new Date().toISOString().slice(0, 10)
+            }
+          : d
+      );
+      updateDepositStatus(deposit.id);
     }
   }
 
@@ -295,6 +548,8 @@ function closeHandoverModal() {
     accessories: '',
     handoverNotes: '',
     damageRecord: '',
+    deductAmount: '',
+    deductReason: '',
     ownerConfirmed: false,
     borrowerConfirmed: false
   };
@@ -397,6 +652,7 @@ onMounted(() => {
   const storedMaintenance = localStorage.getItem('zfl-3-maintenance');
   const storedTrips = localStorage.getItem('zfl-3-trips');
   const storedHandovers = localStorage.getItem('zfl-3-handovers');
+  const storedDeposits = localStorage.getItem('zfl-3-deposits');
   if (storedMembers) members.value = JSON.parse(storedMembers);
   if (storedGears) gears.value = JSON.parse(storedGears);
   requests.value = storedRequests
@@ -411,6 +667,9 @@ onMounted(() => {
   handoverRecords.value = storedHandovers
     ? normalizeHandoverRecords(JSON.parse(storedHandovers), gears.value, requests.value)
     : [];
+  depositRecords.value = storedDeposits
+    ? normalizeDepositRecords(JSON.parse(storedDeposits), gears.value, requests.value)
+    : [];
   if (trips.value.length > 0 && !selectedTripId.value) {
     selectedTripId.value = trips.value[0].id;
   }
@@ -422,6 +681,7 @@ watch(requests, (value) => localStorage.setItem('zfl-3-requests', JSON.stringify
 watch(maintenanceRecords, (value) => localStorage.setItem('zfl-3-maintenance', JSON.stringify(value)), { deep: true });
 watch(trips, (value) => localStorage.setItem('zfl-3-trips', JSON.stringify(value)), { deep: true });
 watch(handoverRecords, (value) => localStorage.setItem('zfl-3-handovers', JSON.stringify(value)), { deep: true });
+watch(depositRecords, (value) => localStorage.setItem('zfl-3-deposits', JSON.stringify(value)), { deep: true });
 
 const categories = computed(() => ['全部分类', ...new Set(gears.value.map((gear) => gear.category))]);
 const filteredGears = computed(() => gears.value.filter((gear) => category.value === '全部分类' || gear.category === category.value));
@@ -695,6 +955,13 @@ function updateRequest(id, status) {
   requests.value = requests.value.map((item) => item.id === id ? { ...item, status } : item);
   if (record && status === '已同意') {
     gears.value = gears.value.map((gear) => gear.id === record.gearId ? { ...gear, status: '借出中' } : gear);
+    const existingDeposit = getDepositByRequest(record.id);
+    if (!existingDeposit) {
+      const newDeposit = createDepositRecord(record.id);
+      if (newDeposit) {
+        depositRecords.value = [newDeposit, ...depositRecords.value];
+      }
+    }
   }
 }
 
@@ -835,7 +1102,7 @@ function deleteMaintenance(id) {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','申请列表','借用日历','交接确认单','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','成员资料','我的借出','我的借入']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -843,6 +1110,9 @@ function deleteMaintenance(id) {
       <article><strong>{{ gears.filter((item) => item.status === '可借').length }}</strong><span>当前可借</span></article>
       <article><strong>{{ requests.filter((item) => item.status === '待处理').length }}</strong><span>待处理申请</span></article>
       <article><strong>{{ handoverCount }}</strong><span>交接记录</span></article>
+      <article><strong>{{ depositCount }}</strong><span>押金记录</span></article>
+      <article><strong>{{ pendingDepositCount }}</strong><span>待收押金</span></article>
+      <article><strong>¥{{ totalDepositDeducted }}</strong><span>累计扣除</span></article>
       <article><strong>{{ maintenanceCount }}</strong><span>保养记录</span></article>
       <article><strong>{{ tripsCount }}</strong><span>出行计划</span></article>
       <article><strong>{{ members.length }}</strong><span>社群成员</span></article>
@@ -1077,6 +1347,141 @@ function deleteMaintenance(id) {
         </article>
       </div>
     </section>
+
+    <section v-if="tab === '押金台账'" class="panel">
+      <div class="toolbar">
+        <h2>押金台账</h2>
+        <div class="filter-group">
+          <select v-model="depositMemberFilter">
+            <option v-for="opt in depositMemberOptions" :key="opt">{{ opt }}</option>
+          </select>
+          <select v-model="depositGearFilter">
+            <option v-for="opt in depositGearOptions" :key="opt">{{ opt }}</option>
+          </select>
+          <select v-model="depositFilter">
+            <option v-for="opt in depositStatusList" :key="opt">{{ opt }}</option>
+          </select>
+        </div>
+      </div>
+      <div class="deposit-summary">
+        <div class="deposit-summary-item">
+          <span class="deposit-summary-label">押金记录总数</span>
+          <span class="deposit-summary-value">{{ depositCount }}</span>
+        </div>
+        <div class="deposit-summary-item">
+          <span class="deposit-summary-label">待收取</span>
+          <span class="deposit-summary-value pending">{{ pendingDepositCount }}</span>
+        </div>
+        <div class="deposit-summary-item">
+          <span class="deposit-summary-label">累计已收</span>
+          <span class="deposit-summary-value received">¥{{ totalDepositReceived }}</span>
+        </div>
+        <div class="deposit-summary-item">
+          <span class="deposit-summary-label">累计扣除</span>
+          <span class="deposit-summary-value deducted">¥{{ totalDepositDeducted }}</span>
+        </div>
+      </div>
+      <div v-if="filteredDeposits.length === 0" class="muted" style="padding: 40px; text-align: center;">暂无押金记录，借用申请被同意后将自动生成押金台账</div>
+      <div v-else class="deposit-list">
+        <article v-for="deposit in filteredDeposits" :key="deposit.id" class="deposit-card" @click="openDepositModal(deposit.id, 'view')">
+          <div class="deposit-header">
+            <strong>{{ deposit.gearName }}</strong>
+            <span :class="['deposit-status-badge', deposit.status]">{{ deposit.status }}</span>
+          </div>
+          <div class="deposit-meta">
+            <span>出借人：{{ deposit.owner }}</span>
+            <span>借用人：{{ deposit.borrower }}</span>
+            <span>创建日期：{{ deposit.createdAt }}</span>
+          </div>
+          <div class="deposit-amounts">
+            <div class="amount-item">
+              <span class="amount-label">押金应收</span>
+              <span class="amount-value">¥{{ deposit.depositAmount || 0 }}</span>
+            </div>
+            <div class="amount-item">
+              <span class="amount-label">已收</span>
+              <span class="amount-value received">¥{{ deposit.receivedAmount || 0 }}</span>
+            </div>
+            <div class="amount-item">
+              <span class="amount-label">扣除</span>
+              <span class="amount-value deducted">¥{{ deposit.deductedAmount || 0 }}</span>
+            </div>
+            <div class="amount-item">
+              <span class="amount-label">退还</span>
+              <span class="amount-value refunded">¥{{ deposit.refundedAmount || 0 }}</span>
+            </div>
+          </div>
+          <p v-if="deposit.deductReason" class="deduct-reason">扣除原因：{{ deposit.deductReason }}</p>
+          <p v-if="deposit.notes" class="deposit-notes">备注：{{ deposit.notes }}</p>
+          <div class="deposit-actions" @click.stop>
+            <button class="ghost small" @click="openDepositModal(deposit.id, 'edit')">编辑</button>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <div v-if="showDepositModal" class="modal-overlay" @click.self="closeDepositModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>{{ depositModalMode === 'edit' ? '编辑押金记录' : '押金详情' }}</h3>
+          <button class="ghost small" @click="closeDepositModal">关闭</button>
+        </div>
+        <div class="modal-body">
+          <div class="handover-info">
+            <div class="info-row">
+              <span class="info-label">装备名称</span>
+              <span class="info-value">{{ depositForm.gearName }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">出借人</span>
+              <span class="info-value">{{ depositForm.owner }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">借用人</span>
+              <span class="info-value">{{ depositForm.borrower }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">当前状态</span>
+              <span :class="['info-value', 'deposit-status-badge', depositForm.status]">{{ depositForm.status }}</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>押金应收（元）</label>
+            <input v-model="depositForm.depositAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="押金金额" />
+          </div>
+
+          <div class="form-group">
+            <label>已收金额（元）</label>
+            <input v-model="depositForm.receivedAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="已收取的押金金额" />
+          </div>
+
+          <div class="form-group">
+            <label>扣除金额（元）</label>
+            <input v-model="depositForm.deductedAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="因损耗扣除的金额" />
+          </div>
+
+          <div class="form-group">
+            <label>退还金额（元）</label>
+            <input v-model="depositForm.refundedAmount" :disabled="depositModalMode !== 'edit'" type="number" min="0" placeholder="已退还的金额" />
+          </div>
+
+          <div class="form-group">
+            <label>扣除原因</label>
+            <textarea v-model="depositForm.deductReason" :disabled="depositModalMode !== 'edit'" placeholder="扣除押金的原因"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>备注</label>
+            <textarea v-model="depositForm.notes" :disabled="depositModalMode !== 'edit'" placeholder="其他备注信息"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="ghost" @click="closeDepositModal">取消</button>
+          <button v-if="depositModalMode === 'edit'" @click="saveDepositRecord">保存</button>
+        </div>
+      </div>
+    </div>
 
     <section v-if="tab === '保养记录'" class="layout">
       <form class="panel" @submit.prevent="addMaintenance">
@@ -1351,6 +1756,17 @@ function deleteMaintenance(id) {
             <textarea v-model="handoverForm.damageRecord" placeholder="记录归还时的损耗情况，没有则填写无"></textarea>
           </div>
 
+          <div v-if="handoverModalMode === '归还'" class="form-group">
+            <label>押金扣除金额（元）</label>
+            <input v-model="handoverForm.deductAmount" type="number" min="0" placeholder="填写扣除金额，0表示不扣除" />
+            <small class="muted">押金总额：¥{{ handoverForm.deposit || 0 }}</small>
+          </div>
+
+          <div v-if="handoverModalMode === '归还'" class="form-group">
+            <label>扣除原因</label>
+            <textarea v-model="handoverForm.deductReason" placeholder="说明扣除押金的原因，如装备损坏、配件丢失等"></textarea>
+          </div>
+
           <div class="confirm-section">
             <h4>双方确认</h4>
             <div class="confirm-buttons">
@@ -1569,7 +1985,43 @@ article span { margin-top: 5px; }
 .confirm-btn.confirmed { background: #dcfce7; border-color: #22c55e; color: #166534; }
 .confirm-success { margin: 12px 0 0; text-align: center; color: #166534; font-weight: 600; font-size: 14px; }
 
+.deposit-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.deposit-summary-item { background: #f6f8f2; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.deposit-summary-label { font-size: 13px; color: #63705d; }
+.deposit-summary-value { font-size: 22px; font-weight: 700; color: #22251f; }
+.deposit-summary-value.pending { color: #92400e; }
+.deposit-summary-value.received { color: #166534; }
+.deposit-summary-value.deducted { color: #991b1b; }
+
+.deposit-list { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.deposit-card { background: #fff; border: 1px solid #dfe3d5; border-radius: 8px; padding: 16px; cursor: pointer; transition: all 0.2s; }
+.deposit-card:hover { border-color: #2f4a2c; box-shadow: 0 4px 12px rgba(47, 74, 44, 0.1); }
+.deposit-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.deposit-header strong { font-size: 16px; }
+.deposit-status-badge { padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+.deposit-status-badge.待收取 { background: #fef3c7; color: #92400e; }
+.deposit-status-badge.已收取 { background: #dbeafe; color: #1e40af; }
+.deposit-status-badge.部分扣除 { background: #fef3c7; color: #92400e; }
+.deposit-status-badge.已扣除 { background: #fee2e2; color: #991b1b; }
+.deposit-status-badge.已退还 { background: #dcfce7; color: #166534; }
+.deposit-status-badge.异常 { background: #fee2e2; color: #991b1b; }
+.deposit-meta { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.deposit-meta span { font-size: 13px; color: #63705d; margin: 0; }
+.deposit-amounts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: #f6f8f2; border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+.amount-item { display: flex; flex-direction: column; gap: 4px; text-align: center; }
+.amount-label { font-size: 11px; color: #63705d; }
+.amount-value { font-size: 15px; font-weight: 600; color: #22251f; }
+.amount-value.received { color: #1e40af; }
+.amount-value.deducted { color: #991b1b; }
+.amount-value.refunded { color: #166534; }
+.deduct-reason { margin: 0; padding: 8px 12px; background: #fef2f2; border-radius: 6px; font-size: 13px; color: #991b1b; }
+.deposit-notes { margin: 6px 0 0; font-size: 13px; color: #63705d; }
+.deposit-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+
 @media (max-width: 900px) { main { padding: 16px; } .hero, .toolbar { flex-direction: column; align-items: stretch; gap: 10px; } .metrics, .layout, .split, .trip-layout, .trip-gear-sections { grid-template-columns: 1fr; } .member-card { flex-direction: column; }
+  .deposit-summary { grid-template-columns: repeat(2, 1fr); }
+  .deposit-list { grid-template-columns: 1fr; }
+  .deposit-amounts { grid-template-columns: repeat(2, 1fr); }
   .calendar-toolbar { flex-direction: column; align-items: stretch; }
   .calendar-title-group { justify-content: space-between; }
   .calendar-header-row, .calendar-data-row { grid-template-columns: 120px repeat(7, 1fr); overflow-x: auto; min-width: 700px; }
