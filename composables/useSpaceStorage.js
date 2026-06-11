@@ -240,10 +240,19 @@ export function useSpaceStorage() {
 
   function loadAllSpaces() {
     spaces.value = getSpaceList();
-    currentSpaceId.value = getCurrentSpaceId();
-    if (currentSpaceId.value && spaces.value.length > 0) {
-      ensureSpaceDataLoaded(currentSpaceId.value);
+    if (spaces.value.length === 0) {
+      currentSpaceId.value = null;
+      return;
     }
+
+    let savedCurrent = getCurrentSpaceId();
+    if (!savedCurrent || !spaces.value.some((s) => s.id === savedCurrent)) {
+      savedCurrent = spaces.value[0].id;
+      setCurrentSpaceId(savedCurrent);
+    }
+
+    currentSpaceId.value = savedCurrent;
+    spaces.value.forEach((s) => ensureSpaceDataLoaded(s.id));
   }
 
   function ensureSpaceDataLoaded(spaceId) {
@@ -272,6 +281,15 @@ export function useSpaceStorage() {
     spaceData.value[newSpace.id] = createEmptySpaceData();
     saveSpace(newSpace.id);
     return newSpace;
+  }
+
+  function updateSpaceById(spaceId, name, description) {
+    spaces.value = spaces.value.map((s) =>
+      s.id === spaceId
+        ? { ...s, name: name.trim() || s.name, description: description.trim() }
+        : s
+    );
+    setSpaceList(spaces.value);
   }
 
   function deleteSpaceById(spaceId) {
@@ -338,6 +356,7 @@ export function useSpaceStorage() {
     ensureSpaceDataLoaded,
     saveSpace,
     createNewSpace,
+    updateSpaceById,
     deleteSpaceById,
     switchToSpace,
     resetSpace,

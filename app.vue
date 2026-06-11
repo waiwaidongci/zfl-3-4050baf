@@ -6,16 +6,30 @@ import {
   SPACE_LIST_KEY,
   CURRENT_SPACE_KEY,
   SPACE_DATA_PREFIX,
-  OLD_KEYS,
   hasOldData,
-  iso
+  iso,
+  useSpaceStorage
 } from './composables/useSpaceStorage.js';
 
-const spaces = ref([]);
-const currentSpaceId = ref(null);
-const spaceData = ref({});
+const storage = useSpaceStorage();
+const {
+  spaces,
+  currentSpaceId,
+  spaceData,
+  dataErrorWarning,
+  currentSpace,
+  currentSpaceData,
+  ensureSpaceDataLoaded,
+  saveSpace,
+  createNewSpace,
+  updateSpaceById,
+  deleteSpaceById,
+  switchToSpace,
+  resetSpace,
+  importIntoSpace
+} = storage;
+
 const migrationWarning = ref('');
-const dataErrorWarning = ref('');
 const showSpaceModal = ref(false);
 const spaceModalMode = ref('create');
 const editingSpaceId = ref(null);
@@ -341,77 +355,14 @@ function migrateOldDataToDefaultSpace() {
   return { migrated: true, message: msg, spaceId: defaultSpaceId };
 }
 
-function loadSpaceData(spaceId) {
-  try {
-    const raw = localStorage.getItem(SPACE_DATA_PREFIX + spaceId);
-    if (!raw) return createEmptySpaceData();
-    const data = safeParseJSON(raw, null);
-    if (!data || typeof data !== 'object') {
-      dataErrorWarning.value = '空间数据格式损坏，已加载空白数据。可尝试重新创建空间。';
-      return createEmptySpaceData();
-    }
-    const members = Array.isArray(data.members) ? data.members.filter((m) => m && m.nickname) : createDefaultMembers();
-    const gears = Array.isArray(data.gears) ? data.gears.filter((g) => g && g.name) : createDefaultGears();
-    const requests = normalizeRequests(data.requests, gears);
-    const maintenanceRecords = normalizeMaintenanceRecords(data.maintenanceRecords || [], gears);
-    const trips = normalizeTrips(data.trips || [], gears, members);
-    const handoverRecords = normalizeHandoverRecords(data.handoverRecords || [], gears, requests);
-    const depositRecords = normalizeDepositRecords(data.depositRecords || [], gears, requests);
-    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords };
-  } catch (e) {
-    dataErrorWarning.value = `加载空间数据时出错：${e.message}。已加载空白数据。`;
-    return createEmptySpaceData();
-  }
-}
-
-function createEmptySpaceData() {
-  const members = createDefaultMembers();
-  const gears = createDefaultGears();
-  return {
-    members,
-    gears,
-    requests: createDefaultRequests(gears),
-    maintenanceRecords: createDefaultMaintenanceRecords(gears),
-    trips: createDefaultTrips(gears, members),
-    handoverRecords: [],
-    depositRecords: []
-  };
-}
-
 function saveSpaceData(spaceId) {
-  if (!spaceId) return;
-  const data = spaceData.value[spaceId];
-  if (!data) return;
-  localStorage.setItem(SPACE_DATA_PREFIX + spaceId, JSON.stringify(data));
+  saveSpace(spaceId);
 }
 
 function importSpaceData(spaceId, importedData) {
-  if (!spaceId || !importedData || typeof importedData !== 'object') return false;
-  const currentData = spaceData.value[spaceId];
-  if (!currentData) return false;
-  if (importedData.members !== undefined) {
-    currentData.members = [...importedData.members];
-  }
-  if (importedData.gears !== undefined) {
-    currentData.gears = [...importedData.gears];
-  }
-  if (importedData.requests !== undefined) {
-    currentData.requests = [...importedData.requests];
-  }
-  if (importedData.maintenanceRecords !== undefined) {
-    currentData.maintenanceRecords = [...importedData.maintenanceRecords];
-  }
-  if (importedData.trips !== undefined) {
-    currentData.trips = [...importedData.trips];
-  }
-  if (importedData.handoverRecords !== undefined) {
-    currentData.handoverRecords = [...importedData.handoverRecords];
-  }
-  if (importedData.depositRecords !== undefined) {
-    currentData.depositRecords = [...importedData.depositRecords];
-  }
-  saveSpaceData(spaceId);
-  const firstMember = currentData.members?.[0];
+  const success = importIntoSpace(spaceId, importedData);
+  if (!success) return false;
+  const firstMember = spaceData.value[spaceId]?.members?.[0];
   if (firstMember && firstMember.nickname) {
     currentUser.value = firstMember.nickname;
   }
@@ -419,37 +370,19 @@ function importSpaceData(spaceId, importedData) {
 }
 
 function getCurrentSpaceData() {
-  if (!currentSpaceId.value) return null;
-  return spaceData.value[currentSpaceId.value];
+  return currentSpaceData.value;
 }
 
 function ensureSpaceDataExists(spaceId) {
-  if (!spaceData.value[spaceId]) {
-    spaceData.value[spaceId] = loadSpaceData(spaceId);
-  }
-  return spaceData.value[spaceId];
+  return ensureSpaceDataLoaded(spaceId);
 }
 
 function createSpace(name, description = '') {
-  const newSpace = {
-    id: crypto.randomUUID(),
-    name: name.trim() || '新社群空间',
-    description: description.trim(),
-    createdAt: new Date().toISOString().slice(0, 10)
-  };
-  spaces.value = [...spaces.value, newSpace];
-  localStorage.setItem(SPACE_LIST_KEY, JSON.stringify(spaces.value));
-  const emptyData = createEmptySpaceData();
-  spaceData.value[newSpace.id] = emptyData;
-  saveSpaceData(newSpace.id);
-  return newSpace;
+  return createNewSpace(name, description);
 }
 
 function updateSpace(spaceId, name, description) {
-  spaces.value = spaces.value.map((s) =>
-    s.id === spaceId ? { ...s, name: name.trim() || s.name, description: description.trim() } : s
-  );
-  localStorage.setItem(SPACE_LIST_KEY, JSON.stringify(spaces.value));
+  updateSpaceById(spaceId, name, description);
 }
 
 function deleteSpace(spaceId) {
@@ -460,20 +393,12 @@ function deleteSpace(spaceId) {
     alert('至少需要保留一个空间');
     return;
   }
-  spaces.value = spaces.value.filter((s) => s.id !== spaceId);
-  localStorage.setItem(SPACE_LIST_KEY, JSON.stringify(spaces.value));
-  localStorage.removeItem(SPACE_DATA_PREFIX + spaceId);
-  delete spaceData.value[spaceId];
-  if (currentSpaceId.value === spaceId) {
-    switchSpace(spaces.value[0].id);
-  }
+  deleteSpaceById(spaceId);
 }
 
 function switchSpace(spaceId) {
   if (!spaceId || spaceId === currentSpaceId.value) return;
-  currentSpaceId.value = spaceId;
-  localStorage.setItem(CURRENT_SPACE_KEY, spaceId);
-  ensureSpaceDataExists(spaceId);
+  switchToSpace(spaceId);
   const data = getCurrentSpaceData();
   if (data && data.members.length > 0 && !data.members.some((m) => m.nickname === currentUser.value)) {
     currentUser.value = data.members[0].nickname;
@@ -486,8 +411,7 @@ function resetSpaceData(spaceId) {
   const space = spaces.value.find((s) => s.id === spaceId);
   if (!space) return;
   if (!confirm(`确定重置空间「${space.name}」的所有数据吗？此操作将清空该空间的成员、装备、申请等所有记录，不可恢复。`)) return;
-  spaceData.value[spaceId] = createEmptySpaceData();
-  saveSpaceData(spaceId);
+  resetSpace(spaceId);
   if (currentSpaceId.value === spaceId) {
     const data = getCurrentSpaceData();
     if (data && data.members.length > 0) {
@@ -603,8 +527,6 @@ const depositRecords = computed({
   }
 });
 
-const currentSpace = computed(() => spaces.value.find((s) => s.id === currentSpaceId.value));
-
 const currentUser = ref('阿岚');
 const tab = ref('装备库');
 const category = ref('全部分类');
@@ -695,25 +617,11 @@ onMounted(() => {
     migrationWarning.value = migrationResult.message;
   }
 
-  const rawSpaces = localStorage.getItem(SPACE_LIST_KEY);
-  let loadedSpaces = safeParseJSON(rawSpaces, null);
-  if (!loadedSpaces || !Array.isArray(loadedSpaces) || loadedSpaces.length === 0) {
+  storage.loadAllSpaces();
+  if (spaces.value.length === 0) {
     const defaultSpace = createSpace('我的露营社群', '首个社群空间');
-    loadedSpaces = [defaultSpace];
-    ensureSpaceDataExists(defaultSpace.id);
-    currentSpaceId.value = defaultSpace.id;
-  } else {
-    spaces.value = loadedSpaces;
-    let savedCurrent = localStorage.getItem(CURRENT_SPACE_KEY);
-    if (!savedCurrent || !loadedSpaces.some((s) => s.id === savedCurrent)) {
-      savedCurrent = loadedSpaces[0].id;
-      localStorage.setItem(CURRENT_SPACE_KEY, savedCurrent);
-    }
-    currentSpaceId.value = savedCurrent;
-    ensureSpaceDataExists(savedCurrent);
+    switchToSpace(defaultSpace.id);
   }
-
-  spaces.value.forEach((s) => ensureSpaceDataExists(s.id));
 
   const data = getCurrentSpaceData();
   if (data && data.members.length > 0) {
