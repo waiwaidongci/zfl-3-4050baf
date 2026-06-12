@@ -1880,6 +1880,9 @@ function closeHealthProfile() {
               <span :class="['inventory-status-tag', lastInventoryByGear[gear.id].checkStatus]" style="margin-left: 6px;">
                 {{ getInventoryStatusLabel(lastInventoryByGear[gear.id].checkStatus) }}
               </span>
+              <div v-if="lastInventoryByGear[gear.id].checker" style="margin-top: 4px; color: #5a7a4f;">
+                👤 盘点人：{{ lastInventoryByGear[gear.id].checker }}
+              </div>
               <div v-if="lastInventoryByGear[gear.id].missingAccessories" style="margin-top: 4px; color: #b02a2a;">
                 缺失配件：{{ lastInventoryByGear[gear.id].missingAccessories }}
               </div>

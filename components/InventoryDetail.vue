@@ -91,6 +91,7 @@
           v-for="item in filteredItems"
           :key="item.id"
           :item="item"
+          :members="members"
           :editable="inventory.status === '进行中'"
           @toggle-status="handleToggleItem(item.id)"
           @update-item="(updates) => handleUpdateItem(item.id, updates)"
@@ -116,6 +117,10 @@ const props = defineProps({
     default: () => []
   },
   trips: {
+    type: Array,
+    default: () => []
+  },
+  members: {
     type: Array,
     default: () => []
   }

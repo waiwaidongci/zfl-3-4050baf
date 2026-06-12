@@ -8,7 +8,7 @@ export const INVENTORY_TYPES = ['出行前', '出行后'];
 export const INVENTORY_STATUSES = ['进行中', '已完成'];
 export const ITEM_CHECK_STATUSES = ['待盘点', '已盘点', '缺失'];
 
-export function createInventoryItemFromGear(gear) {
+export function createInventoryItemFromGear(gear, checker = '') {
   return {
     id: crypto.randomUUID(),
     gearId: gear.id,
@@ -16,7 +16,8 @@ export function createInventoryItemFromGear(gear) {
     owner: gear.owner,
     checkStatus: '待盘点',
     missingAccessories: '',
-    notes: ''
+    notes: '',
+    checker
   };
 }
 

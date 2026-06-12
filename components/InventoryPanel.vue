@@ -40,6 +40,7 @@
         :inventory="currentInventory"
         :gears="gears"
         :trips="trips"
+        :members="members"
         @back="goBack"
         @toggle-item="handleToggleItem"
         @update-item="handleUpdateItem"

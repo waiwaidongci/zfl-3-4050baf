@@ -7,12 +7,20 @@
       <div class="item-header">
         <strong class="item-name">{{ item.gearName }}</strong>
         <span class="item-owner">{{ item.owner }}</span>
+        <span v-if="item.checker" class="item-checker">👤 {{ item.checker }}</span>
       </div>
       <div v-if="editable && expanded" class="item-edit">
         <div class="edit-row">
           <label>盘点状态</label>
           <select :value="item.checkStatus" @change="handleStatusChange">
             <option v-for="s in statusOptions" :key="s" :value="s">{{ s }}</option>
+          </select>
+        </div>
+        <div class="edit-row">
+          <label>盘点人</label>
+          <select :value="item.checker" @change="handleCheckerChange">
+            <option value="">— 未指定 —</option>
+            <option v-for="m in memberNames" :key="m" :value="m">{{ m }}</option>
           </select>
         </div>
         <div class="edit-row">
@@ -60,6 +68,10 @@ const props = defineProps({
     type: Object,
     required: true
   },
+  members: {
+    type: Array,
+    default: () => []
+  },
   editable: {
     type: Boolean,
     default: true
@@ -75,6 +87,8 @@ const emit = defineEmits(['toggle-status', 'update-item', 'remove']);
 const expanded = ref(false);
 
 const statusOptions = ['待盘点', '已盘点', '缺失'];
+
+const memberNames = computed(() => props.members.map((m) => m.nickname).filter(Boolean));
 
 const statusIcon = computed(() => {
   switch (props.item.checkStatus) {
@@ -94,6 +108,10 @@ function handleToggle() {
 
 function handleStatusChange(e) {
   emit('update-item', { checkStatus: e.target.value });
+}
+
+function handleCheckerChange(e) {
+  emit('update-item', { checker: e.target.value });
 }
 
 function handleMissingChange(e) {
@@ -164,6 +182,7 @@ function handleRemove() {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 4px;
 }
 
@@ -175,6 +194,14 @@ function handleRemove() {
 .item-owner {
   font-size: 12px;
   color: #888;
+}
+
+.item-checker {
+  font-size: 12px;
+  color: #5a7a4f;
+  background: #f0f5ea;
+  padding: 2px 8px;
+  border-radius: 10px;
 }
 
 .item-edit {

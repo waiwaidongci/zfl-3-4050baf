@@ -254,12 +254,13 @@ const INVENTORY_TYPES = ['出行前', '出行后'];
 const INVENTORY_STATUSES = ['进行中', '已完成'];
 const ITEM_CHECK_STATUSES = ['待盘点', '已盘点', '缺失'];
 
-export function normalizeInventoryItems(rawItems, gearList) {
+export function normalizeInventoryItems(rawItems, gearList, memberList = []) {
   const warnings = [];
   if (!Array.isArray(rawItems)) {
     warnings.push('盘点项数据不是数组，已重置为空');
     return { data: [], warnings };
   }
+  const memberNames = memberList.map((m) => m.nickname);
   const data = rawItems.map((item, index) => {
     if (!item || typeof item !== 'object') {
       warnings.push(`盘点项第 ${index + 1} 条数据格式异常，已跳过`);
@@ -272,6 +273,7 @@ export function normalizeInventoryItems(rawItems, gearList) {
     const checkStatus = ITEM_CHECK_STATUSES.includes(item.checkStatus)
       ? item.checkStatus
       : '待盘点';
+    const checker = memberNames.includes(item.checker) ? item.checker : (item.checker || '');
     return {
       id: item.id || crypto.randomUUID(),
       gearId: gear ? gear.id : (item.gearId || ''),
@@ -279,7 +281,8 @@ export function normalizeInventoryItems(rawItems, gearList) {
       owner: gear ? gear.owner : (item.owner || ''),
       checkStatus,
       missingAccessories: item.missingAccessories || '',
-      notes: item.notes || ''
+      notes: item.notes || '',
+      checker
     };
   }).filter(Boolean);
   return { data, warnings };
@@ -301,7 +304,7 @@ export function normalizeInventoryLists(rawLists, gearList, tripList, memberList
     const type = INVENTORY_TYPES.includes(list.type) ? list.type : '出行前';
     const status = INVENTORY_STATUSES.includes(list.status) ? list.status : '进行中';
     const checker = memberNames.includes(list.checker) ? list.checker : (list.checker || '');
-    const itemsResult = normalizeInventoryItems(list.items || [], gearList);
+    const itemsResult = normalizeInventoryItems(list.items || [], gearList, memberList);
     warnings.push(...itemsResult.warnings.map((w) => `盘点单「${list.name || '未命名'}」：${w}`));
     return {
       id: list.id || crypto.randomUUID(),

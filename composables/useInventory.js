@@ -36,7 +36,7 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
             checkStatus: item.checkStatus,
             missingAccessories: item.missingAccessories,
             notes: item.notes,
-            checker: list.checker
+            checker: item.checker || list.checker
           };
         }
       }
@@ -46,17 +46,19 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
 
   function createList({ name, type, tripId = '', checker = '', notes = '' }) {
     const trip = tripList.value.find((t) => t.id === tripId);
+    const defaultChecker = checker || user.value;
     const items = trip && trip.gears && trip.gears.length > 0
       ? trip.gears.map((g) => {
           const gear = gearList.value.find((x) => x.id === g.gearId);
-          return gear ? createInventoryItemFromGear(gear) : {
+          return gear ? createInventoryItemFromGear(gear, defaultChecker) : {
             id: crypto.randomUUID(),
             gearId: g.gearId || '',
             gearName: g.gearName || '未知装备',
             owner: g.owner || '',
             checkStatus: '待盘点',
             missingAccessories: '',
-            notes: ''
+            notes: '',
+            checker: defaultChecker
           };
         })
       : [];
@@ -66,7 +68,7 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
       type,
       tripId,
       tripName: trip ? trip.destination : '',
-      checker: checker || user.value,
+      checker: defaultChecker,
       notes,
       items
     });
@@ -80,7 +82,7 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     const list = lists.value.find((l) => l.id === inventoryId);
     if (!list) return null;
     if (list.items.some((item) => item.gearId === gearId)) return null;
-    const newItem = createInventoryItemFromGear(gear);
+    const newItem = createInventoryItemFromGear(gear, user.value);
     return {
       ...list,
       items: [...list.items, newItem],
@@ -104,7 +106,13 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     return {
       ...list,
       items: list.items.map((item) =>
-        item.id === itemId ? { ...item, checkStatus } : item
+        item.id === itemId
+          ? {
+              ...item,
+              checkStatus,
+              checker: checkStatus !== '待盘点' ? (item.checker || user.value) : item.checker
+            }
+          : item
       ),
       updatedAt: new Date().toISOString()
     };
@@ -157,18 +165,20 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     if (!list || !trip || !trip.gears) return null;
 
     const existingGearIds = new Set(list.items.map((i) => i.gearId).filter(Boolean));
+    const defaultChecker = user.value;
     const newItems = trip.gears
       .filter((g) => g.gearId && !existingGearIds.has(g.gearId))
       .map((g) => {
         const gear = gearList.value.find((x) => x.id === g.gearId);
-        return gear ? createInventoryItemFromGear(gear) : {
+        return gear ? createInventoryItemFromGear(gear, defaultChecker) : {
           id: crypto.randomUUID(),
           gearId: g.gearId || '',
           gearName: g.gearName || '未知装备',
           owner: g.owner || '',
           checkStatus: '待盘点',
           missingAccessories: '',
-          notes: ''
+          notes: '',
+          checker: defaultChecker
         };
       });
 
