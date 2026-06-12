@@ -29,14 +29,17 @@ export function createSettlement({ tripId, tripName, members = [], name = '' }) 
   };
 }
 
-export function linkDepositsToSettlement(settlement, depositRecords, tripMembers, tripGears = []) {
+export function linkDepositsToSettlement(settlement, depositRecords, tripMembers, tripGears = [], tripRequestIds = null) {
   const memberNames = new Set(tripMembers.map((m) => m.nickname || m));
   const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
+  const requestIds = new Set((tripRequestIds || []).filter(Boolean));
   const useGearFilter = tripGearIds.size > 0;
+  const useRequestFilter = Array.isArray(tripRequestIds);
 
   const relevantDeposits = depositRecords.filter((d) => {
     if (!memberNames.has(d.borrower)) return false;
-    if (useGearFilter && d.gearId && !tripGearIds.has(d.gearId)) return false;
+    if (useGearFilter && !tripGearIds.has(d.gearId)) return false;
+    if (useRequestFilter && !requestIds.has(d.requestId)) return false;
     return true;
   });
 
@@ -189,14 +192,17 @@ export function cleanupDeletedTrip(settlements, tripId) {
   });
 }
 
-export function syncDepositChanges(settlement, depositRecords, tripGears = []) {
+export function syncDepositChanges(settlement, depositRecords, tripGears = [], tripRequestIds = null) {
   const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
+  const requestIds = new Set((tripRequestIds || []).filter(Boolean));
   const useGearFilter = tripGearIds.size > 0;
+  const useRequestFilter = Array.isArray(tripRequestIds);
 
   const members = settlement.members.map((sm) => {
     const memberDeposits = depositRecords.filter((d) => {
       if (d.borrower !== sm.nickname) return false;
-      if (useGearFilter && d.gearId && !tripGearIds.has(d.gearId)) return false;
+      if (useGearFilter && !tripGearIds.has(d.gearId)) return false;
+      if (useRequestFilter && !requestIds.has(d.requestId)) return false;
       return true;
     });
     const existingMap = {};

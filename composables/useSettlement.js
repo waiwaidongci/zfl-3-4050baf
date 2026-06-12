@@ -25,7 +25,6 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
   const tripList = computed(() => resolve(trips) || []);
   const memberList = computed(() => resolve(members) || []);
   const depositList = computed(() => resolve(depositRecords) || []);
-  const gearList = computed(() => resolve(gears) || []);
   const requestList = computed(() => resolve(requests) || []);
 
   const settlementCount = computed(() => records.value.length);
@@ -33,18 +32,36 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
   const confirmedCount = computed(() => records.value.filter((s) => s.status === '已确认').length);
   const settledCount = computed(() => records.value.filter((s) => s.status === '已结算').length);
 
+  function getTripRequestIds(trip) {
+    if (!trip) return [];
+    const tripGearIds = new Set((trip.gears || []).map((g) => g.gearId).filter(Boolean));
+    const tripMembers = new Set(trip.members || []);
+    const tripDate = trip.startDate ? new Date(trip.startDate) : null;
+    return requestList.value
+      .filter((req) => {
+        if (!tripGearIds.has(req.gearId)) return false;
+        if (!tripMembers.has(req.borrower)) return false;
+        if (!tripDate || !req.start || !req.end) return true;
+        const start = new Date(req.start);
+        const end = new Date(req.end);
+        return tripDate >= start && tripDate <= end;
+      })
+      .map((req) => req.id);
+  }
+
   function createForTrip(tripId) {
     const trip = tripList.value.find((t) => t.id === tripId);
     if (!trip) return null;
     const tripMembers = memberList.value.filter((m) => trip.members.includes(m.nickname));
     const tripGears = trip.gears || [];
+    const tripRequestIds = getTripRequestIds(trip);
     const settlement = createSettlement({
       tripId: trip.id,
       tripName: trip.destination,
       members: tripMembers,
       name: `${trip.destination} 结算单`
     });
-    const linked = linkDepositsToSettlement(settlement, depositList.value, trip.members, tripGears);
+    const linked = linkDepositsToSettlement(settlement, depositList.value, trip.members, tripGears, tripRequestIds);
     return calculateSettlement(linked);
   }
 
@@ -108,7 +125,8 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
     if (!record) return null;
     const trip = record.tripId ? tripList.value.find((t) => t.id === record.tripId) : null;
     const tripGears = trip ? (trip.gears || []) : [];
-    return syncDepositChanges(record, depositList.value, tripGears);
+    const tripRequestIds = getTripRequestIds(trip);
+    return syncDepositChanges(record, depositList.value, tripGears, tripRequestIds);
   }
 
   function getStats(settlementId) {
