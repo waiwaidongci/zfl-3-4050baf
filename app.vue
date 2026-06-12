@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import DataImportExport from './components/DataImportExport.vue';
 import EquipmentHealthProfile from './components/EquipmentHealthProfile.vue';
 import InventoryPanel from './components/InventoryPanel.vue';
+import SettlementPanel from './components/SettlementPanel.vue';
+import { propagateMemberRename, cleanupDeletedTrip } from './utils/settlementTransform.js';
 import {
   safeParseJSON,
   SPACE_LIST_KEY,
@@ -537,6 +539,14 @@ const inventoryLists = computed({
   }
 });
 
+const settlementRecords = computed({
+  get: () => getCurrentSpaceData()?.settlementRecords || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.settlementRecords = val;
+  }
+});
+
 const currentUser = ref('阿岚');
 const showHealthProfile = ref(false);
 const currentHealthGearId = ref('');
@@ -661,6 +671,7 @@ watch(trips, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), 
 watch(handoverRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(depositRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(inventoryLists, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(settlementRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 
 function createDepositRecord(requestId) {
   const req = requests.value.find((r) => r.id === requestId);
@@ -1287,6 +1298,7 @@ function cancelEditTrip() {
 function deleteTrip(trip) {
   if (!confirm(`确定删除出行计划「${trip.destination}」吗？`)) return;
   trips.value = trips.value.filter((t) => t.id !== trip.id);
+  settlementRecords.value = cleanupDeletedTrip(settlementRecords.value, trip.id);
   if (selectedTripId.value === trip.id) {
     selectedTripId.value = trips.value.length > 0 ? trips.value[0].id : null;
   }
@@ -1496,6 +1508,7 @@ function saveMember() {
         members: t.members.map((m) => m === oldNickname ? newNickname : m),
         gears: t.gears.map((g) => g.owner === oldNickname ? { ...g, owner: newNickname } : g)
       }));
+      settlementRecords.value = propagateMemberRename(settlementRecords.value, oldNickname, newNickname);
       if (currentUser.value === oldNickname) currentUser.value = newNickname;
       if (form.value.owner === oldNickname) form.value.owner = newNickname;
       if (requestForm.value.borrower === oldNickname) requestForm.value.borrower = newNickname;
@@ -1526,7 +1539,9 @@ function deleteMember(member) {
   const maintenanceHandlerCount = maintenanceRecords.value.filter((r) => r.handler === nickname).length;
   const tripMemberCount = trips.value.filter((t) => t.members.includes(nickname)).length;
   const tripGearOwnerCount = trips.value.filter((t) => t.gears.some((g) => g.owner === nickname)).length;
-  if (gearCount > 0 || borrowCount > 0 || ownCount > 0 || maintenanceOwnerCount > 0 || maintenanceHandlerCount > 0 || tripMemberCount > 0 || tripGearOwnerCount > 0) {
+  const settlementMemberCount = settlementRecords.value.filter((s) => s.members.some((sm) => sm.nickname === nickname)).length;
+  const settlementPayerCount = settlementRecords.value.filter((s) => (s.extraExpenses || []).some((e) => e.paidBy === nickname)).length;
+  if (gearCount > 0 || borrowCount > 0 || ownCount > 0 || maintenanceOwnerCount > 0 || maintenanceHandlerCount > 0 || tripMemberCount > 0 || tripGearOwnerCount > 0 || settlementMemberCount > 0 || settlementPayerCount > 0) {
     const reasons = [];
     if (gearCount > 0) reasons.push(`${gearCount}件登记装备`);
     if (ownCount > 0) reasons.push(`${ownCount}条作为出借人的申请`);
@@ -1535,6 +1550,8 @@ function deleteMember(member) {
     if (maintenanceHandlerCount > 0) reasons.push(`${maintenanceHandlerCount}条作为处理人的保养记录`);
     if (tripMemberCount > 0) reasons.push(`${tripMemberCount}个出行计划的参与成员`);
     if (tripGearOwnerCount > 0) reasons.push(`${tripGearOwnerCount}个出行计划的装备主人`);
+    if (settlementMemberCount > 0) reasons.push(`${settlementMemberCount}份结算单的参与成员`);
+    if (settlementPayerCount > 0) reasons.push(`${settlementPayerCount}份结算单的费用垫付人`);
     deleteWarning.value = `无法删除「${nickname}」：该成员关联了${reasons.join('、')}，请先处理关联数据。`;
     return;
   }
@@ -1815,7 +1832,7 @@ function closeHealthProfile() {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','费用结算','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -1830,6 +1847,7 @@ function closeHealthProfile() {
       <article><strong>{{ tripsCount }}</strong><span>出行计划</span></article>
       <article><strong>{{ inventoryLists.length }}</strong><span>盘点单</span></article>
       <article><strong>{{ members.length }}</strong><span>社群成员</span></article>
+      <article><strong>{{ settlementRecords.length }}</strong><span>费用结算</span></article>
     </section>
 
     <section v-if="tab === '装备库'" class="layout">
@@ -2478,6 +2496,18 @@ function closeHealthProfile() {
       :members="members"
       :current-user="currentUser"
       @update:inventory-lists="val => inventoryLists = val"
+    />
+
+    <SettlementPanel
+      v-if="tab === '费用结算'"
+      :settlement-records="settlementRecords"
+      :trips="trips"
+      :members="members"
+      :deposit-records="depositRecords"
+      :gears="gears"
+      :requests="requests"
+      :current-user="currentUser"
+      @update:settlement-records="val => settlementRecords = val"
     />
 
     <section v-if="tab === '我的借出' || tab === '我的借入'" class="panel">

@@ -8,6 +8,7 @@ import {
   normalizeHandoverRecords,
   normalizeDepositRecords,
   normalizeInventoryLists,
+  normalizeSettlementRecords,
   DATA_ENTITIES
 } from '../utils/dataTransform.js';
 
@@ -110,7 +111,8 @@ export function createEmptySpaceData() {
     trips: createDefaultTrips(gears, members),
     handoverRecords: [],
     depositRecords: [],
-    inventoryLists: []
+    inventoryLists: [],
+    settlementRecords: []
   };
 }
 
@@ -169,7 +171,8 @@ export function loadSpaceData(spaceId, onError = null) {
     const handoverRecords = normalizeHandoverRecords(data.handoverRecords || [], gears, requests).data;
     const depositRecords = normalizeDepositRecords(data.depositRecords || [], gears, requests).data;
     const inventoryLists = normalizeInventoryLists(data.inventoryLists || [], gears, trips, members).data;
-    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords, inventoryLists };
+    const settlementRecords = normalizeSettlementRecords(data.settlementRecords || [], gears, members, depositRecords).data;
+    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords, inventoryLists, settlementRecords };
   } catch (e) {
     if (onError) onError(`加载空间数据时出错：${e.message}。已加载空白数据。`);
     return createEmptySpaceData();

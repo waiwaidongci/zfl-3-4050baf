@@ -324,6 +324,84 @@ export function normalizeInventoryLists(rawLists, gearList, tripList, memberList
   return { data, warnings };
 }
 
+export function normalizeSettlementRecords(rawRecords, gearList, memberList, depositRecords) {
+  const warnings = [];
+  if (!Array.isArray(rawRecords)) {
+    warnings.push('结算单数据不是数组，已重置为空');
+    return { data: [], warnings };
+  }
+  const memberNames = new Set(memberList.map((m) => m.nickname));
+  const depositIds = new Set(depositRecords.map((d) => d.id));
+  const data = rawRecords.map((record, index) => {
+    if (!record || typeof record !== 'object') {
+      warnings.push(`结算单第 ${index + 1} 条数据格式异常，已跳过`);
+      return null;
+    }
+    const members = Array.isArray(record.members)
+      ? record.members.map((sm) => {
+          if (!sm || typeof sm !== 'object') return null;
+          const nickname = sm.nickname || '';
+          if (nickname && !memberNames.has(nickname)) {
+            warnings.push(`结算单「${record.name || '未命名'}」中成员「${nickname}」不存在于成员列表，保留数据`);
+          }
+          const depositItems = Array.isArray(sm.depositItems)
+            ? sm.depositItems.map((d) => {
+                if (!d || typeof d !== 'object') return null;
+                if (d.depositId && !depositIds.has(d.depositId)) {
+                  warnings.push(`结算单「${record.name || '未命名'}」成员「${nickname}」的押金记录「${d.gearName || ''}」未匹配到押金台账，保留数据`);
+                }
+                return {
+                  depositId: d.depositId || '',
+                  gearName: d.gearName || '未知装备',
+                  depositAmount: d.depositAmount !== undefined ? String(d.depositAmount) : '0',
+                  deductedAmount: d.deductedAmount !== undefined ? String(d.deductedAmount) : '0',
+                  actualDeduct: d.actualDeduct !== undefined ? String(d.actualDeduct) : '0'
+                };
+              }).filter(Boolean)
+            : [];
+          return {
+            memberId: sm.memberId || '',
+            nickname,
+            depositItems,
+            extraShare: sm.extraShare !== undefined ? String(sm.extraShare) : '0',
+            totalOwed: sm.totalOwed !== undefined ? String(sm.totalOwed) : '0',
+            paidAmount: sm.paidAmount !== undefined ? String(sm.paidAmount) : '0',
+            paymentStatus: ['未支付', '部分支付', '已支付'].includes(sm.paymentStatus) ? sm.paymentStatus : '未支付',
+            notes: sm.notes || ''
+          };
+        }).filter(Boolean)
+      : [];
+    const extraExpenses = Array.isArray(record.extraExpenses)
+      ? record.extraExpenses.map((e) => {
+          if (!e || typeof e !== 'object') return null;
+          return {
+            id: e.id || crypto.randomUUID(),
+            name: e.name || '',
+            amount: e.amount !== undefined ? String(e.amount) : '0',
+            paidBy: e.paidBy || ''
+          };
+        }).filter(Boolean)
+      : [];
+    return {
+      id: record.id || crypto.randomUUID(),
+      tripId: record.tripId || '',
+      tripName: record.tripName || '',
+      name: record.name || '未命名结算单',
+      status: ['草稿', '已确认', '已结算'].includes(record.status) ? record.status : '草稿',
+      members,
+      extraExpenses,
+      totalDeposit: record.totalDeposit !== undefined ? String(record.totalDeposit) : '0',
+      totalDeducted: record.totalDeducted !== undefined ? String(record.totalDeducted) : '0',
+      totalExtraExpenses: record.totalExtraExpenses !== undefined ? String(record.totalExtraExpenses) : '0',
+      totalPerMember: record.totalPerMember !== undefined ? String(record.totalPerMember) : '0',
+      notes: record.notes || '',
+      createdAt: record.createdAt || new Date().toISOString().slice(0, 10),
+      updatedAt: record.updatedAt || new Date().toISOString().slice(0, 10)
+    };
+  }).filter(Boolean);
+  return { data, warnings };
+}
+
 export function validateAndNormalizeImportData(rawData) {
   const allWarnings = [];
   const errors = [];
@@ -346,7 +424,8 @@ export function validateAndNormalizeImportData(rawData) {
     trips: rawData.trips !== undefined,
     handoverRecords: rawData.handoverRecords !== undefined || rawData.handovers !== undefined,
     depositRecords: rawData.depositRecords !== undefined || rawData.deposits !== undefined,
-    inventoryLists: rawData.inventoryLists !== undefined
+    inventoryLists: rawData.inventoryLists !== undefined,
+    settlementRecords: rawData.settlementRecords !== undefined
   };
 
   const source = {
@@ -357,7 +436,8 @@ export function validateAndNormalizeImportData(rawData) {
     trips: rawData.trips || [],
     handoverRecords: rawData.handoverRecords || rawData.handovers || [],
     depositRecords: rawData.depositRecords || rawData.deposits || [],
-    inventoryLists: rawData.inventoryLists || []
+    inventoryLists: rawData.inventoryLists || [],
+    settlementRecords: rawData.settlementRecords || []
   };
 
   if (isLegacyFormat) {
@@ -431,6 +511,18 @@ export function validateAndNormalizeImportData(rawData) {
     summary.inventoryLists = inventoryResult.data.length;
   }
 
+  const settlementResult = normalizeSettlementRecords(
+    source.settlementRecords,
+    gearsResult.data,
+    membersResult.data,
+    depositResult.data
+  );
+  allWarnings.push(...settlementResult.warnings);
+  if (entityPresence.settlementRecords) {
+    normalizedData.settlementRecords = settlementResult.data;
+    summary.settlementRecords = settlementResult.data.length;
+  }
+
   summary.totalWarnings = allWarnings.length;
 
   return {
@@ -450,7 +542,8 @@ export const ENTITY_LABELS = {
   trips: '出行',
   handoverRecords: '交接',
   depositRecords: '押金',
-  inventoryLists: '盘点单'
+  inventoryLists: '盘点单',
+  settlementRecords: '费用结算'
 };
 
 export const DATA_ENTITIES = Object.keys(ENTITY_LABELS);
