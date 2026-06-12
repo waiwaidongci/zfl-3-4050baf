@@ -11,6 +11,7 @@ import {
   normalizeSettlementRecords,
   DATA_ENTITIES
 } from '../utils/dataTransform.js';
+import { normalizeReservations } from '../utils/reservationTransform.js';
 
 export const SPACE_LIST_KEY = 'zfl-3-spaces';
 export const CURRENT_SPACE_KEY = 'zfl-3-current-space';
@@ -112,7 +113,8 @@ export function createEmptySpaceData() {
     handoverRecords: [],
     depositRecords: [],
     inventoryLists: [],
-    settlementRecords: []
+    settlementRecords: [],
+    reservations: []
   };
 }
 
@@ -172,7 +174,8 @@ export function loadSpaceData(spaceId, onError = null) {
     const depositRecords = normalizeDepositRecords(data.depositRecords || [], gears, requests).data;
     const inventoryLists = normalizeInventoryLists(data.inventoryLists || [], gears, trips, members).data;
     const settlementRecords = normalizeSettlementRecords(data.settlementRecords || [], gears, members, depositRecords).data;
-    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords, inventoryLists, settlementRecords };
+    const reservations = normalizeReservations(data.reservations || [], gears, members).data;
+    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords, inventoryLists, settlementRecords, reservations };
   } catch (e) {
     if (onError) onError(`加载空间数据时出错：${e.message}。已加载空白数据。`);
     return createEmptySpaceData();

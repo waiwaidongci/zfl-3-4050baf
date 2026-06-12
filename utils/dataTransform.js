@@ -425,7 +425,8 @@ export function validateAndNormalizeImportData(rawData) {
     handoverRecords: rawData.handoverRecords !== undefined || rawData.handovers !== undefined,
     depositRecords: rawData.depositRecords !== undefined || rawData.deposits !== undefined,
     inventoryLists: rawData.inventoryLists !== undefined,
-    settlementRecords: rawData.settlementRecords !== undefined
+    settlementRecords: rawData.settlementRecords !== undefined,
+    reservations: rawData.reservations !== undefined
   };
 
   const source = {
@@ -437,7 +438,8 @@ export function validateAndNormalizeImportData(rawData) {
     handoverRecords: rawData.handoverRecords || rawData.handovers || [],
     depositRecords: rawData.depositRecords || rawData.deposits || [],
     inventoryLists: rawData.inventoryLists || [],
-    settlementRecords: rawData.settlementRecords || []
+    settlementRecords: rawData.settlementRecords || [],
+    reservations: rawData.reservations || []
   };
 
   if (isLegacyFormat) {
@@ -523,6 +525,17 @@ export function validateAndNormalizeImportData(rawData) {
     summary.settlementRecords = settlementResult.data.length;
   }
 
+  const reservationResult = normalizeReservations(
+    source.reservations,
+    gearsResult.data,
+    membersResult.data
+  );
+  allWarnings.push(...reservationResult.warnings);
+  if (entityPresence.reservations) {
+    normalizedData.reservations = reservationResult.data;
+    summary.reservations = reservationResult.data.length;
+  }
+
   summary.totalWarnings = allWarnings.length;
 
   return {
@@ -534,6 +547,8 @@ export function validateAndNormalizeImportData(rawData) {
   };
 }
 
+export { normalizeReservations } from './reservationTransform.js';
+
 export const ENTITY_LABELS = {
   members: '成员',
   gears: '装备',
@@ -543,7 +558,8 @@ export const ENTITY_LABELS = {
   handoverRecords: '交接',
   depositRecords: '押金',
   inventoryLists: '盘点单',
-  settlementRecords: '费用结算'
+  settlementRecords: '费用结算',
+  reservations: '候补预约'
 };
 
 export const DATA_ENTITIES = Object.keys(ENTITY_LABELS);

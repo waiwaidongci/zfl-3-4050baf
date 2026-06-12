@@ -4,7 +4,10 @@ import DataImportExport from './components/DataImportExport.vue';
 import EquipmentHealthProfile from './components/EquipmentHealthProfile.vue';
 import InventoryPanel from './components/InventoryPanel.vue';
 import SettlementPanel from './components/SettlementPanel.vue';
+import ReservationPanel from './components/ReservationPanel.vue';
 import { propagateMemberRename, cleanupDeletedTrip } from './utils/settlementTransform.js';
+import { useReservation } from './composables/useReservation.js';
+import { computeQueuePositions, expireOutdatedReservations, recalcAllPriorities } from './utils/reservationTransform.js';
 import {
   safeParseJSON,
   SPACE_LIST_KEY,
@@ -344,6 +347,7 @@ function migrateOldDataToDefaultSpace() {
     trips,
     handoverRecords,
     depositRecords,
+    reservations: [],
     _migratedFromOld: true,
     _migratedAt: new Date().toISOString()
   };
@@ -547,6 +551,63 @@ const settlementRecords = computed({
   }
 });
 
+const reservations = computed({
+  get: () => getCurrentSpaceData()?.reservations || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.reservations = val;
+  }
+});
+
+const reservationHelper = useReservation({
+  reservations: reservations,
+  gears: gears,
+  requests: requests,
+  handovers: handoverRecords,
+  members: members,
+  currentUser: currentUser,
+  healthInfoMap: ref({})
+});
+
+function triggerReservationCheck() {
+  const result = reservationHelper.checkAndActivate();
+  if (result.list) {
+    reservations.value = result.list;
+  }
+  if (result.activated.length > 0) {
+    for (const resId of result.activated) {
+      const res = reservations.value.find((r) => r.id === resId);
+      if (res) {
+        handleReservationActivated(res);
+      }
+    }
+  }
+}
+
+function handleReservationActivated(reservation) {
+  const gear = gears.value.find((g) => g.id === reservation.gearId);
+  if (!gear) return;
+  const conflicts = findConflictingRequests(gear.id, reservation.start, reservation.end);
+  if (conflicts.length > 0) {
+    alert(`候补预约「${reservation.gearName}」可转正，但日期仍有冲突，请手动处理`);
+    return;
+  }
+  const newRequest = {
+    id: crypto.randomUUID(),
+    gearId: gear.id,
+    gearName: gear.name,
+    owner: gear.owner,
+    borrower: reservation.borrower,
+    start: reservation.start,
+    end: reservation.end,
+    status: '待处理',
+    reason: `候补转正（原候补原因：${reservation.reason}）`,
+    damage: ''
+  };
+  requests.value = [newRequest, ...requests.value];
+  alert(`候补预约「${reservation.gearName}」已自动转正，已生成借用申请`);
+}
+
 const currentUser = ref('阿岚');
 const showHealthProfile = ref(false);
 const currentHealthGearId = ref('');
@@ -575,6 +636,8 @@ const calendarFilterValue = ref('全部');
 const calendarWeekStart = ref(iso(0));
 const conflictWarning = ref('');
 const conflictDetails = ref([]);
+
+const reservationShortcut = ref({ gearId: '', start: '', end: '' });
 
 const sceneOptions = ['湖畔露营', '山地露营', '家庭亲子', '徒步露营', '沙滩露营', '冬季露营'];
 const recommendScene = ref('湖畔露营');
@@ -672,6 +735,7 @@ watch(handoverRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceI
 watch(depositRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(inventoryLists, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(settlementRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(reservations, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 
 function createDepositRecord(requestId) {
   const req = requests.value.find((r) => r.id === requestId);
@@ -991,6 +1055,7 @@ function checkHandoverCompletion(requestId) {
           ? { ...gear, status: '可借', damage: returnHandover.damageRecord || '无' }
           : gear
       );
+      triggerReservationCheck();
     }
   }
 }
@@ -1416,6 +1481,9 @@ function updateRequest(id, status) {
       }
     }
   }
+  if (record && (status === '已拒绝' || status === '已归还')) {
+    triggerReservationCheck();
+  }
 }
 
 function submitDraft(id) {
@@ -1768,6 +1836,54 @@ function closeHealthProfile() {
   showHealthProfile.value = false;
   currentHealthGearId.value = '';
 }
+
+function handleReservationPanelUpdate(newList) {
+  reservations.value = newList;
+}
+
+function handleReservationPanelActivate(reservation) {
+  handleReservationActivated(reservation);
+}
+
+function addReservationFromShortcut() {
+  if (!reservationShortcut.value.gearId) {
+    alert('请选择装备');
+    return;
+  }
+  if (!reservationShortcut.value.start || !reservationShortcut.value.end) {
+    alert('请选择借用日期');
+    return;
+  }
+  if (new Date(reservationShortcut.value.end) < new Date(reservationShortcut.value.start)) {
+    alert('归还日期不能早于借用日期');
+    return;
+  }
+  const newRes = reservationHelper.addReservation({
+    gearId: reservationShortcut.value.gearId,
+    borrower: currentUser.value,
+    start: reservationShortcut.value.start,
+    end: reservationShortcut.value.end,
+    reason: '装备借出中'
+  });
+  if (newRes) {
+    reservations.value = [newRes, ...reservations.value];
+    reservationShortcut.value = { gearId: '', start: '', end: '' };
+    alert('已加入候补队列');
+    tab.value = '预约排程';
+  }
+}
+
+function getReservationsForCell(rowKey, rowType, dateStr) {
+  const date = new Date(dateStr);
+  return reservations.value.filter((res) => {
+    if (res.status !== '候补中' && res.status !== '已转正') return false;
+    if (rowType === 'gear' && res.gearId !== rowKey) return false;
+    if (rowType === 'member' && res.borrower !== rowKey) return false;
+    const resStart = new Date(res.start);
+    const resEnd = new Date(res.end);
+    return date >= resStart && date <= resEnd;
+  });
+}
 </script>
 
 <template>
@@ -1832,7 +1948,7 @@ function closeHealthProfile() {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','装备推荐','申请列表','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','费用结算','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','装备推荐','申请列表','预约排程','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','费用结算','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -1848,6 +1964,7 @@ function closeHealthProfile() {
       <article><strong>{{ inventoryLists.length }}</strong><span>盘点单</span></article>
       <article><strong>{{ members.length }}</strong><span>社群成员</span></article>
       <article><strong>{{ settlementRecords.length }}</strong><span>费用结算</span></article>
+      <article><strong>{{ reservations.filter(r => r.status === '候补中').length }}</strong><span>候补中</span></article>
     </section>
 
     <section v-if="tab === '装备库'" class="layout">
@@ -2030,6 +2147,23 @@ function closeHealthProfile() {
         </div>
         <button v-if="editingDraftId" type="button" class="ghost" @click="cancelEditDraft">取消编辑</button>
 
+        <div class="reservation-shortcut">
+          <label class="muted" style="margin-top: 12px; border-top: 1px dashed #d0d8c5; padding-top: 12px;">
+            不可借或已被占用的装备？提交候补预约
+          </label>
+          <select v-model="reservationShortcut.gearId" style="margin-top: 4px;">
+            <option value="">选择不可借装备</option>
+            <option v-for="gear in gears.filter((g) => g.status !== '可借')" :key="gear.id" :value="gear.id">
+              {{ gear.name }}（{{ gear.owner }}）· {{ gear.status }}
+            </option>
+          </select>
+          <div class="split" style="margin-top: 4px;">
+            <input v-model="reservationShortcut.start" type="date" />
+            <input v-model="reservationShortcut.end" type="date" />
+          </div>
+          <button type="button" class="ghost" style="width: 100%; margin-top: 4px;" @click="addReservationFromShortcut">加入候补</button>
+        </div>
+
         <div v-if="conflictWarning" class="conflict-warning">
           <div class="conflict-header">
             <strong>⚠️ {{ conflictWarning }}</strong>
@@ -2093,6 +2227,20 @@ function closeHealthProfile() {
       </div>
     </section>
 
+    <section v-if="tab === '预约排程'">
+      <ReservationPanel
+        :reservations="reservations"
+        :gears="gears"
+        :requests="requests"
+        :handovers="handoverRecords"
+        :members="members"
+        :current-user="currentUser"
+        :health-info-map="{}"
+        @update:reservations="handleReservationPanelUpdate"
+        @activate="handleReservationPanelActivate"
+      />
+    </section>
+
     <section v-if="tab === '借用日历'" class="panel calendar-panel">
       <div class="calendar-toolbar">
         <div class="calendar-title-group">
@@ -2153,6 +2301,15 @@ function closeHealthProfile() {
                 <div class="cal-req-name">{{ row.type === 'gear' ? req.borrower : req.gearName }}</div>
                 <div class="cal-req-status">{{ req.status }}</div>
               </div>
+              <div
+                v-for="res in getReservationsForCell(row.key, row.type, date)"
+                :key="'res-' + res.id"
+                :class="['cal-request', 'reservation', res.status]"
+                :title="`候补 | ${res.gearName} | ${res.borrower} | ${res.start}~${res.end} | ${res.status}`"
+              >
+                <div class="cal-req-name">{{ row.type === 'gear' ? res.borrower : res.gearName }}</div>
+                <div class="cal-req-status">候补</div>
+              </div>
             </div>
           </div>
         </div>
@@ -2162,6 +2319,7 @@ function closeHealthProfile() {
         <span class="legend-item"><span class="legend-dot 待处理"></span>待处理</span>
         <span class="legend-item"><span class="legend-dot 已同意"></span>已同意</span>
         <span class="legend-item"><span class="legend-dot 借出中"></span>借出中</span>
+        <span class="legend-item"><span class="legend-dot reservation"></span>候补预约</span>
       </div>
     </section>
 
@@ -2603,5 +2761,43 @@ function closeHealthProfile() {
   border-color: #c4bfae;
   transform: translateY(-1px);
   box-shadow: 0 2px 6px rgba(60, 50, 30, 0.08);
+}
+
+.cal-request.reservation {
+  background: #fdf3e0;
+  border-left: 3px solid #c58a2b;
+}
+
+.cal-request.reservation.已转正 {
+  background: #e0f0e0;
+  border-left: 3px solid #2f7a3a;
+}
+
+.cal-request.reservation .cal-req-status {
+  color: #8a6d1b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.legend-dot.reservation {
+  background: #c58a2b;
+  border: none;
+  opacity: 0.8;
+}
+
+.reservation-shortcut {
+  margin-top: 8px;
+}
+
+.reservation-shortcut select,
+.reservation-shortcut input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d0d8c5;
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+  font-family: inherit;
 }
 </style>
