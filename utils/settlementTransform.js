@@ -29,9 +29,16 @@ export function createSettlement({ tripId, tripName, members = [], name = '' }) 
   };
 }
 
-export function linkDepositsToSettlement(settlement, depositRecords, tripMembers) {
+export function linkDepositsToSettlement(settlement, depositRecords, tripMembers, tripGears = []) {
   const memberNames = new Set(tripMembers.map((m) => m.nickname || m));
-  const relevantDeposits = depositRecords.filter((d) => memberNames.has(d.borrower));
+  const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
+  const useGearFilter = tripGearIds.size > 0;
+
+  const relevantDeposits = depositRecords.filter((d) => {
+    if (!memberNames.has(d.borrower)) return false;
+    if (useGearFilter && d.gearId && !tripGearIds.has(d.gearId)) return false;
+    return true;
+  });
 
   const updatedMembers = settlement.members.map((sm) => {
     const memberDeposits = relevantDeposits.filter((d) => d.borrower === sm.nickname);
@@ -182,9 +189,16 @@ export function cleanupDeletedTrip(settlements, tripId) {
   });
 }
 
-export function syncDepositChanges(settlement, depositRecords) {
+export function syncDepositChanges(settlement, depositRecords, tripGears = []) {
+  const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
+  const useGearFilter = tripGearIds.size > 0;
+
   const members = settlement.members.map((sm) => {
-    const memberDeposits = depositRecords.filter((d) => d.borrower === sm.nickname);
+    const memberDeposits = depositRecords.filter((d) => {
+      if (d.borrower !== sm.nickname) return false;
+      if (useGearFilter && d.gearId && !tripGearIds.has(d.gearId)) return false;
+      return true;
+    });
     const existingMap = {};
     sm.depositItems.forEach((d) => {
       existingMap[d.depositId] = d;

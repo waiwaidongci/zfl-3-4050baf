@@ -37,13 +37,14 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
     const trip = tripList.value.find((t) => t.id === tripId);
     if (!trip) return null;
     const tripMembers = memberList.value.filter((m) => trip.members.includes(m.nickname));
+    const tripGears = trip.gears || [];
     const settlement = createSettlement({
       tripId: trip.id,
       tripName: trip.destination,
       members: tripMembers,
       name: `${trip.destination} 结算单`
     });
-    const linked = linkDepositsToSettlement(settlement, depositList.value, trip.members);
+    const linked = linkDepositsToSettlement(settlement, depositList.value, trip.members, tripGears);
     return calculateSettlement(linked);
   }
 
@@ -105,7 +106,9 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
   function refreshFromDeposits(settlementId) {
     const record = records.value.find((s) => s.id === settlementId);
     if (!record) return null;
-    return syncDepositChanges(record, depositList.value);
+    const trip = record.tripId ? tripList.value.find((t) => t.id === record.tripId) : null;
+    const tripGears = trip ? (trip.gears || []) : [];
+    return syncDepositChanges(record, depositList.value, tripGears);
   }
 
   function getStats(settlementId) {

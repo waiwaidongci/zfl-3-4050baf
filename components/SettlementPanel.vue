@@ -26,6 +26,15 @@
           <div class="member-tags">
             <span v-for="name in tripMemberNames" :key="name" class="member-tag">{{ name }}</span>
           </div>
+          <label class="muted" style="margin-top: 10px;">出行装备（将纳入押金结算）</label>
+          <div class="member-tags">
+            <span v-for="gear in selectedTripGears" :key="gear.gearId || gear.gearName" class="gear-tag">
+              {{ gear.gearName }}
+            </span>
+          </div>
+          <p v-if="selectedTripGears.length === 0" class="muted" style="font-size: 12px; margin-top: 4px;">
+            此出行暂无装备，结算单将无押金项
+          </p>
         </div>
         <button type="submit">创建结算单</button>
       </form>
@@ -286,6 +295,12 @@ const tripMemberNames = computed(() => {
   return trip ? trip.members : [];
 });
 
+const selectedTripGears = computed(() => {
+  if (!createForm.value.tripId) return [];
+  const trip = props.trips.find((t) => t.id === createForm.value.tripId);
+  return trip ? (trip.gears || []) : [];
+});
+
 watch(
   () => props.currentUser,
   (val) => {
@@ -436,6 +451,7 @@ function handleNotesChange(value) {
 .auto-members { margin-bottom: 12px; }
 .member-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .member-tag { background: #eef2e9; color: #2f4a2c; padding: 4px 10px; border-radius: 6px; font-size: 13px; }
+.gear-tag { background: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 6px; font-size: 12px; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .toolbar h2 { margin: 0; }
 .settlement-list { display: flex; flex-direction: column; gap: 12px; }
