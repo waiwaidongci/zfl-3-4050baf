@@ -1099,7 +1099,7 @@ const lastInventoryByGear = computed(() => {
           checkStatus: item.checkStatus,
           missingAccessories: item.missingAccessories,
           notes: item.notes,
-          checker: list.checker
+          checker: item.checker || list.checker
         };
       }
     }
