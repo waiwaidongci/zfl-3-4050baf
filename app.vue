@@ -8,6 +8,7 @@ import ReservationPanel from './components/ReservationPanel.vue';
 import { propagateMemberRename, cleanupDeletedTrip } from './utils/settlementTransform.js';
 import { useReservation } from './composables/useReservation.js';
 import { computeQueuePositions, expireOutdatedReservations, recalcAllPriorities } from './utils/reservationTransform.js';
+import { buildAllHealthInfoMap } from './composables/useEquipmentHealth.js';
 import {
   safeParseJSON,
   SPACE_LIST_KEY,
@@ -559,6 +560,18 @@ const reservations = computed({
   }
 });
 
+const currentUser = ref('阿岚');
+
+const healthInfoMap = computed(() =>
+  buildAllHealthInfoMap({
+    gears: gears.value,
+    requests: requests.value,
+    handovers: handoverRecords.value,
+    maintenanceRecords: maintenanceRecords.value,
+    depositRecords: depositRecords.value
+  })
+);
+
 const reservationHelper = useReservation({
   reservations: reservations,
   gears: gears,
@@ -566,7 +579,7 @@ const reservationHelper = useReservation({
   handovers: handoverRecords,
   members: members,
   currentUser: currentUser,
-  healthInfoMap: ref({})
+  healthInfoMap: healthInfoMap
 });
 
 function triggerReservationCheck() {
@@ -608,7 +621,6 @@ function handleReservationActivated(reservation) {
   alert(`候补预约「${reservation.gearName}」已自动转正，已生成借用申请`);
 }
 
-const currentUser = ref('阿岚');
 const showHealthProfile = ref(false);
 const currentHealthGearId = ref('');
 const tab = ref('装备库');
@@ -2235,7 +2247,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
         :handovers="handoverRecords"
         :members="members"
         :current-user="currentUser"
-        :health-info-map="{}"
+        :health-info-map="healthInfoMap"
         @update:reservations="handleReservationPanelUpdate"
         @activate="handleReservationPanelActivate"
       />

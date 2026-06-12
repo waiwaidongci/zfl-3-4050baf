@@ -204,6 +204,62 @@ function resolve(val) {
   return val;
 }
 
+export function calcOverallHealthScore({ gear, damageCount, depositDeductCount, daysSinceLastMaintenance, borrowCount }) {
+  let score = 100;
+  if ((gear?.damage || '').trim()) score -= 25;
+  if (damageCount > 0) score -= Math.min(damageCount * 8, 25);
+  if (depositDeductCount > 0) score -= Math.min(depositDeductCount * 5, 15);
+  if (daysSinceLastMaintenance === null) score -= 10;
+  else if (daysSinceLastMaintenance > 90) score -= 20;
+  else if (daysSinceLastMaintenance > 60) score -= 10;
+  if (borrowCount > 15) score -= Math.min((borrowCount - 15) * 2, 10);
+  return Math.max(0, Math.min(100, score));
+}
+
+export function buildAllHealthInfoMap({ gears, requests, handovers, maintenanceRecords, depositRecords }) {
+  const map = {};
+  const gearList = gears || [];
+  const reqList = requests || [];
+  const hoList = handovers || [];
+  const mList = maintenanceRecords || [];
+  const dList = depositRecords || [];
+
+  for (const gear of gearList) {
+    const relatedHandovers = hoList.filter((h) => h.gearId === gear.id);
+    const completedHandovers = relatedHandovers.filter(
+      (h) => h.type === '借出' && h.ownerConfirmed && h.borrowerConfirmed
+    );
+    const borrowCount = completedHandovers.length;
+
+    const relatedMaintenance = mList.filter((r) => r.gearId === gear.id);
+    const lastMaintenance = relatedMaintenance.length
+      ? relatedMaintenance.reduce((a, b) => (a.date > b.date ? a : b))
+      : null;
+    const daysSinceLastMaintenance = lastMaintenance ? daysAgo(lastMaintenance.date) : null;
+
+    const damageCount = relatedHandovers.filter((h) => h.damageRecord && h.damageRecord.trim()).length;
+
+    const relatedDeposits = dList.filter((d) => d.gearId === gear.id);
+    const depositDeductCount = relatedDeposits.filter((d) => Number(d.deductedAmount) > 0).length;
+
+    map[gear.id] = {
+      gearId: gear.id,
+      borrowCount,
+      damageCount,
+      depositDeductCount,
+      daysSinceLastMaintenance,
+      overallHealthScore: calcOverallHealthScore({
+        gear,
+        damageCount,
+        depositDeductCount,
+        daysSinceLastMaintenance,
+        borrowCount
+      })
+    };
+  }
+  return map;
+}
+
 export function useEquipmentHealth({ gearId, gears, requests, handovers, maintenanceRecords, depositRecords }) {
   const gear = computed(() => {
     const g = resolve(gears) || [];
@@ -307,17 +363,15 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
     })
   );
 
-  const overallHealthScore = computed(() => {
-    let score = 100;
-    if ((gear.value?.damage || '').trim()) score -= 25;
-    if (damageCount.value > 0) score -= Math.min(damageCount.value * 8, 25);
-    if (depositDeductCount.value > 0) score -= Math.min(depositDeductCount.value * 5, 15);
-    if (daysSinceLastMaintenance.value === null) score -= 10;
-    else if (daysSinceLastMaintenance.value > 90) score -= 20;
-    else if (daysSinceLastMaintenance.value > 60) score -= 10;
-    if (borrowCount.value > 15) score -= Math.min((borrowCount.value - 15) * 2, 10);
-    return Math.max(0, Math.min(100, score));
-  });
+  const overallHealthScore = computed(() =>
+    calcOverallHealthScore({
+      gear: gear.value,
+      damageCount: damageCount.value,
+      depositDeductCount: depositDeductCount.value,
+      daysSinceLastMaintenance: daysSinceLastMaintenance.value,
+      borrowCount: borrowCount.value
+    })
+  );
 
   const healthLevel = computed(() => {
     const s = overallHealthScore.value;

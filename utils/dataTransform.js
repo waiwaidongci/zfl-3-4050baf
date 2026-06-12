@@ -4,6 +4,9 @@ const iso = (offset = 0) => {
   return date.toISOString().slice(0, 10);
 };
 
+import { normalizeReservations as _normalizeReservations } from './reservationTransform.js';
+const normalizeReservations = _normalizeReservations;
+
 export function findGearByIdOrName(gearList, gearId, gearName, owner) {
   return gearList.find((gear) => gear.id === gearId)
     || gearList.find((gear) => gear.name === gearName && gear.owner === owner);
@@ -546,8 +549,6 @@ export function validateAndNormalizeImportData(rawData) {
     summary
   };
 }
-
-export { normalizeReservations } from './reservationTransform.js';
 
 export const ENTITY_LABELS = {
   members: '成员',

@@ -39,14 +39,21 @@ export function useReservation({ reservations, gears, requests, handovers, membe
 
   const sortedQueue = computed(() => {
     const withPositions = computeQueuePositions(reservationList.value);
-    return withPositions;
+    return withPositions.sort((a, b) => {
+      if (a.status === '候补中' && b.status !== '候补中') return -1;
+      if (a.status !== '候补中' && b.status === '候补中') return 1;
+      if (a.status === '候补中' && b.status === '候补中') {
+        if (b.queuePosition !== a.queuePosition) return a.queuePosition - b.queuePosition;
+      }
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
   });
 
   function getContextForPriority() {
     return {
       requests: requestList.value,
       handovers: handoverList.value,
-      healthInfo: healthMap.value
+      healthInfoMap: healthMap.value
     };
   }
 

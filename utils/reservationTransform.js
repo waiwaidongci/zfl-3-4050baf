@@ -28,7 +28,7 @@ export function createReservation({ gearId, gearName, owner, borrower, start, en
   };
 }
 
-export function calculatePriorityScore(reservation, { requests, handovers, healthInfo }) {
+export function calculatePriorityScore(reservation, { requests, handovers, healthInfoMap }) {
   let score = 0;
 
   const daysUntilStart = Math.floor(
@@ -54,7 +54,8 @@ export function calculatePriorityScore(reservation, { requests, handovers, healt
   );
   score += Math.min(completedHandovers.length * 5, 15);
 
-  const health = healthInfo || {};
+  const map = healthInfoMap || {};
+  const health = map[reservation.gearId] || {};
   const healthScore = health.overallHealthScore;
   if (healthScore !== undefined && healthScore < 50) {
     score -= 10;
@@ -71,9 +72,14 @@ export function computeQueuePositions(reservations) {
       return a.createdAt.localeCompare(b.createdAt);
     });
 
-  return active.map((r, index) => ({
+  const positionMap = new Map();
+  active.forEach((r, index) => {
+    positionMap.set(r.id, index + 1);
+  });
+
+  return reservations.map((r) => ({
     ...r,
-    queuePosition: index + 1
+    queuePosition: r.status === '候补中' ? (positionMap.get(r.id) || 0) : 0
   }));
 }
 
