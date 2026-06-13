@@ -387,7 +387,8 @@ export function normalizeSettlementRecords(rawRecords, gearList, memberList, dep
           const depositItems = Array.isArray(sm.depositItems)
             ? sm.depositItems.map((d) => {
                 if (!d || typeof d !== 'object') return null;
-                if (d.depositId && !depositIds.has(d.depositId)) {
+                const source = d.source === 'inventory' ? 'inventory' : 'deposit';
+                if (source !== 'inventory' && d.depositId && !depositIds.has(d.depositId)) {
                   warnings.push(`结算单「${record.name || '未命名'}」成员「${nickname}」的押金记录「${d.gearName || ''}」未匹配到押金台账，保留数据`);
                 }
                 return {
@@ -395,7 +396,13 @@ export function normalizeSettlementRecords(rawRecords, gearList, memberList, dep
                   gearName: d.gearName || '未知装备',
                   depositAmount: d.depositAmount !== undefined ? String(d.depositAmount) : '0',
                   deductedAmount: d.deductedAmount !== undefined ? String(d.deductedAmount) : '0',
-                  actualDeduct: d.actualDeduct !== undefined ? String(d.actualDeduct) : '0'
+                  actualDeduct: d.actualDeduct !== undefined ? String(d.actualDeduct) : '0',
+                  source,
+                  inventoryId: d.inventoryId || '',
+                  inventoryName: d.inventoryName || '',
+                  inventoryDate: d.inventoryDate || '',
+                  description: d.description || '',
+                  pending: !!d.pending
                 };
               }).filter(Boolean)
             : [];

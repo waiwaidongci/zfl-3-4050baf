@@ -44,6 +44,7 @@ function collectInventoryDepositDeductions(inventoryLists, tripMembers, tripGear
         const amount = Number(action.amount) || 0;
         if (amount <= 0) return;
         const borrower = action.borrower || item.owner;
+        if (!memberNames.has(borrower)) return;
         deductions.push({
           id: `inv-${action.id}`,
           source: 'inventory',
