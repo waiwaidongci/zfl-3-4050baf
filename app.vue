@@ -376,14 +376,14 @@ function saveSpaceData(spaceId) {
   saveSpace(spaceId);
 }
 
-function importSpaceData(spaceId, importedData) {
-  const success = importIntoSpace(spaceId, importedData);
-  if (!success) return false;
+function importSpaceData(spaceId, importedData, mode = 'overwrite', mergeAnalysis = null) {
+  const result = importIntoSpace(spaceId, importedData, mode, mergeAnalysis);
+  if (!result.success) return false;
   const firstMember = spaceData.value[spaceId]?.members?.[0];
   if (firstMember && firstMember.nickname) {
     currentUser.value = firstMember.nickname;
   }
-  return true;
+  return result;
 }
 
 function getCurrentSpaceData() {
@@ -438,11 +438,25 @@ function resetSpaceData(spaceId) {
   alert('空间数据已重置');
 }
 
-function handleDataImported(importedData) {
+function handleDataImported(payload) {
   if (!currentSpaceId.value) return;
-  const success = importSpaceData(currentSpaceId.value, importedData);
-  if (success) {
-    console.log('数据导入成功');
+
+  const { data, mode = 'overwrite', mergeAnalysis = null } = payload || {};
+
+  if (!data) {
+    console.error('导入数据为空');
+    return;
+  }
+
+  const result = importSpaceData(currentSpaceId.value, data, mode, mergeAnalysis);
+  if (result && result.success) {
+    if (result.stats) {
+      console.log('合并导入成功', result.stats);
+    } else {
+      console.log('覆盖导入成功');
+    }
+  } else {
+    console.error('数据导入失败');
   }
 }
 

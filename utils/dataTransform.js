@@ -608,3 +608,297 @@ export const ENTITY_LABELS = {
 };
 
 export const DATA_ENTITIES = Object.keys(ENTITY_LABELS);
+
+export function matchMember(existingMembers, imported) {
+  return existingMembers.find((m) => m.nickname === imported.nickname);
+}
+
+export function matchGear(existingGears, imported) {
+  return existingGears.find((g) => g.name === imported.name && g.owner === imported.owner);
+}
+
+export function matchRequest(existingRequests, imported) {
+  return existingRequests.find((r) =>
+    r.gearName === imported.gearName &&
+    r.owner === imported.owner &&
+    r.borrower === imported.borrower &&
+    r.start === imported.start &&
+    r.end === imported.end
+  );
+}
+
+export function matchMaintenanceRecord(existingRecords, imported) {
+  return existingRecords.find((r) =>
+    r.gearName === imported.gearName &&
+    r.owner === imported.owner &&
+    r.date === imported.date &&
+    r.type === imported.type
+  );
+}
+
+export function matchTrip(existingTrips, imported) {
+  return existingTrips.find((t) =>
+    t.destination === imported.destination &&
+    t.startDate === imported.startDate
+  );
+}
+
+export function matchHandoverRecord(existingRecords, imported) {
+  if (imported.requestId) {
+    const byRequest = existingRecords.find((r) => r.requestId === imported.requestId && r.type === imported.type);
+    if (byRequest) return byRequest;
+  }
+  return existingRecords.find((r) =>
+    r.gearName === imported.gearName &&
+    r.owner === imported.owner &&
+    r.borrower === imported.borrower &&
+    r.type === imported.type &&
+    r.createdAt === imported.createdAt
+  );
+}
+
+export function matchDepositRecord(existingRecords, imported) {
+  if (imported.requestId) {
+    const byRequest = existingRecords.find((r) => r.requestId === imported.requestId);
+    if (byRequest) return byRequest;
+  }
+  return existingRecords.find((r) =>
+    r.gearName === imported.gearName &&
+    r.owner === imported.owner &&
+    r.borrower === imported.borrower
+  );
+}
+
+export function matchInventoryList(existingLists, imported) {
+  return existingLists.find((l) =>
+    l.name === imported.name &&
+    l.date === imported.date &&
+    l.type === imported.type
+  );
+}
+
+export function matchSettlementRecord(existingRecords, imported) {
+  return existingRecords.find((r) =>
+    r.name === imported.name &&
+    r.createdAt === imported.createdAt
+  );
+}
+
+export function matchReservation(existingReservations, imported) {
+  return existingReservations.find((r) =>
+    r.gearName === imported.gearName &&
+    r.owner === imported.owner &&
+    r.borrower === imported.borrower &&
+    r.start === imported.start &&
+    r.end === imported.end
+  );
+}
+
+const MATCHERS = {
+  members: matchMember,
+  gears: matchGear,
+  requests: matchRequest,
+  maintenanceRecords: matchMaintenanceRecord,
+  trips: matchTrip,
+  handoverRecords: matchHandoverRecord,
+  depositRecords: matchDepositRecord,
+  inventoryLists: matchInventoryList,
+  settlementRecords: matchSettlementRecord,
+  reservations: matchReservation
+};
+
+function updateItemWithImported(existing, imported, preserveId = true) {
+  const result = { ...imported };
+  if (preserveId && existing.id) {
+    result.id = existing.id;
+  }
+  return result;
+}
+
+function reconnectRelationalFields(item, idMap) {
+  const result = { ...item };
+
+  if (item.memberId && idMap.members?.[item.memberId]) {
+    result.memberId = idMap.members[item.memberId];
+  }
+  if (item.gearId && idMap.gears?.[item.gearId]) {
+    result.gearId = idMap.gears[item.gearId];
+  }
+  if (item.requestId && idMap.requests?.[item.requestId]) {
+    result.requestId = idMap.requests[item.requestId];
+  }
+  if (item.tripId && idMap.trips?.[item.tripId]) {
+    result.tripId = idMap.trips[item.tripId];
+  }
+  if (item.fromReservationId && idMap.reservations?.[item.fromReservationId]) {
+    result.fromReservationId = idMap.reservations[item.fromReservationId];
+  }
+  if (item.generatedRequestId && idMap.requests?.[item.generatedRequestId]) {
+    result.generatedRequestId = idMap.requests[item.generatedRequestId];
+  }
+
+  if (item.members && Array.isArray(item.members)) {
+    result.members = item.members.map((m) => {
+      if (typeof m === 'string') return m;
+      if (m.memberId && idMap.members?.[m.memberId]) {
+        return { ...m, memberId: idMap.members[m.memberId] };
+      }
+      return m;
+    });
+  }
+
+  if (item.gears && Array.isArray(item.gears)) {
+    result.gears = item.gears.map((g) => {
+      if (g.gearId && idMap.gears?.[g.gearId]) {
+        return { ...g, gearId: idMap.gears[g.gearId] };
+      }
+      return g;
+    });
+  }
+
+  if (item.items && Array.isArray(item.items)) {
+    result.items = item.items.map((it) => reconnectRelationalFields(it, idMap));
+  }
+
+  return result;
+}
+
+export function analyzeMergeData(currentData, importedData) {
+  const analysis = {};
+  const idMap = {
+    members: {},
+    gears: {},
+    requests: {},
+    maintenanceRecords: {},
+    trips: {},
+    handoverRecords: {},
+    depositRecords: {},
+    inventoryLists: {},
+    settlementRecords: {},
+    reservations: {}
+  };
+
+  DATA_ENTITIES.forEach((entityKey) => {
+    if (importedData[entityKey] === undefined) {
+      return;
+    }
+
+    const existing = currentData[entityKey] || [];
+    const importedList = importedData[entityKey] || [];
+    const matcher = MATCHERS[entityKey];
+
+    const stats = {
+      entity: entityKey,
+      label: ENTITY_LABELS[entityKey],
+      total: importedList.length,
+      added: 0,
+      updated: 0,
+      skipped: 0,
+      unmatched: 0,
+      addedItems: [],
+      updatedItems: [],
+      skippedItems: [],
+      unmatchedItems: []
+    };
+
+    importedList.forEach((item) => {
+      const matched = matcher(existing, item);
+
+      if (matched) {
+        const isIdentical = JSON.stringify(matched) === JSON.stringify(item);
+        if (isIdentical) {
+          stats.skipped++;
+          stats.skippedItems.push(item);
+          idMap[entityKey][item.id] = matched.id;
+        } else {
+          stats.updated++;
+          stats.updatedItems.push({ old: matched, new: item });
+          idMap[entityKey][item.id] = matched.id;
+        }
+      } else {
+        if (entityKey === 'requests' || entityKey === 'handoverRecords' ||
+            entityKey === 'depositRecords' || entityKey === 'reservations') {
+          const gearOk = item.gearName && item.owner;
+          const borrowerOk = item.borrower;
+          if (!gearOk || !borrowerOk) {
+            stats.unmatched++;
+            stats.unmatchedItems.push(item);
+            return;
+          }
+        }
+        stats.added++;
+        stats.addedItems.push(item);
+        idMap[entityKey][item.id] = item.id;
+      }
+    });
+
+    analysis[entityKey] = stats;
+  });
+
+  const summary = {
+    totalAdded: 0,
+    totalUpdated: 0,
+    totalSkipped: 0,
+    totalUnmatched: 0
+  };
+
+  Object.values(analysis).forEach((stats) => {
+    summary.totalAdded += stats.added;
+    summary.totalUpdated += stats.updated;
+    summary.totalSkipped += stats.skipped;
+    summary.totalUnmatched += stats.unmatched;
+  });
+
+  return { analysis, summary, idMap };
+}
+
+export function performMerge(currentData, importedData, mergeAnalysis) {
+  const result = { ...currentData };
+  const { idMap } = mergeAnalysis;
+
+  DATA_ENTITIES.forEach((entityKey) => {
+    if (importedData[entityKey] === undefined) {
+      return;
+    }
+
+    const existing = [...(currentData[entityKey] || [])];
+    const importedList = importedData[entityKey] || [];
+    const analysis = mergeAnalysis.analysis[entityKey];
+    const matcher = MATCHERS[entityKey];
+
+    const merged = [...existing];
+
+    analysis.addedItems.forEach((item) => {
+      const reconnected = reconnectRelationalFields(item, idMap);
+      merged.push(reconnected);
+    });
+
+    analysis.updatedItems.forEach(({ old: oldItem, new: newItem }) => {
+      const idx = merged.findIndex((m) => m.id === oldItem.id);
+      if (idx !== -1) {
+        const updated = updateItemWithImported(oldItem, newItem, true);
+        const reconnected = reconnectRelationalFields(updated, idMap);
+        merged[idx] = reconnected;
+      }
+    });
+
+    result[entityKey] = merged;
+  });
+
+  return result;
+}
+
+export function validateAndNormalizeForMerge(rawData, currentData) {
+  const normalizeResult = validateAndNormalizeImportData(rawData);
+
+  if (!normalizeResult.valid) {
+    return normalizeResult;
+  }
+
+  const mergeAnalysis = analyzeMergeData(currentData || {}, normalizeResult.data || {});
+
+  return {
+    ...normalizeResult,
+    mergeAnalysis
+  };
+}

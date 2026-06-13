@@ -9,7 +9,9 @@ import {
   normalizeDepositRecords,
   normalizeInventoryLists,
   normalizeSettlementRecords,
-  DATA_ENTITIES
+  DATA_ENTITIES,
+  performMerge,
+  analyzeMergeData
 } from '../utils/dataTransform.js';
 import { normalizeReservations } from '../utils/reservationTransform.js';
 
@@ -201,7 +203,11 @@ export function buildExportData(spaceData, spaceInfo = null) {
   return result;
 }
 
-export function mergeImportData(targetData, importedData) {
+export function mergeImportData(targetData, importedData, mode = 'overwrite', mergeAnalysis = null) {
+  if (mode === 'merge' && mergeAnalysis) {
+    return performMerge(targetData, importedData, mergeAnalysis);
+  }
+
   const result = { ...targetData };
   DATA_ENTITIES.forEach((key) => {
     if (importedData[key] !== undefined) {
@@ -328,17 +334,32 @@ export function useSpaceStorage() {
     saveSpace(spaceId);
   }
 
-  function importIntoSpace(spaceId, importedData) {
-    if (!spaceId || !importedData || typeof importedData !== 'object') return false;
+  function importIntoSpace(spaceId, importedData, mode = 'overwrite', mergeAnalysis = null) {
+    if (!spaceId || !importedData || typeof importedData !== 'object') return { success: false, stats: null };
     const current = spaceData.value[spaceId];
-    if (!current) return false;
-    DATA_ENTITIES.forEach((key) => {
-      if (importedData[key] !== undefined) {
-        current[key] = [...importedData[key]];
-      }
-    });
+    if (!current) return { success: false, stats: null };
+
+    let stats = null;
+
+    if (mode === 'merge' && mergeAnalysis) {
+      const merged = performMerge(current, importedData, mergeAnalysis);
+      DATA_ENTITIES.forEach((key) => {
+        if (merged[key] !== undefined) {
+          current[key] = merged[key];
+        }
+      });
+      stats = mergeAnalysis.summary;
+    } else {
+      DATA_ENTITIES.forEach((key) => {
+        if (importedData[key] !== undefined) {
+          current[key] = [...importedData[key]];
+        }
+      });
+      stats = null;
+    }
+
     saveSpace(spaceId);
-    return true;
+    return { success: true, stats };
   }
 
   function exportFromSpace(spaceId, selectedEntities = null) {

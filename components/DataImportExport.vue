@@ -40,13 +40,25 @@
       <div v-else class="import-preview-wrapper">
         <ImportPreview
           :previewResult="previewResult"
+          :defaultMode="defaultImportMode"
           @cancel="cancelImport"
           @confirm="confirmImport"
         />
       </div>
 
       <div v-if="importSuccess" class="import-success">
-        ✅ 数据导入成功！当前空间数据已更新。
+        <div v-if="importStats" class="import-stats">
+          <strong>✅ 合并导入成功！</strong>
+          <div class="stats-row">
+            <span>新增: {{ importStats.totalAdded }}</span>
+            <span>更新: {{ importStats.totalUpdated }}</span>
+            <span>跳过: {{ importStats.totalSkipped }}</span>
+            <span v-if="importStats.totalUnmatched > 0">无法匹配: {{ importStats.totalUnmatched }}</span>
+          </div>
+        </div>
+        <div v-else>
+          ✅ 数据导入成功！当前空间数据已更新。
+        </div>
       </div>
     </div>
   </section>
@@ -56,7 +68,7 @@
 import { ref, computed } from 'vue';
 import ImportPreview from './ImportPreview.vue';
 import { buildExportData, downloadJSON, readFileAsText, safeParseJSON } from '../composables/useSpaceStorage.js';
-import { validateAndNormalizeImportData, DATA_ENTITIES, ENTITY_LABELS } from '../utils/dataTransform.js';
+import { validateAndNormalizeForMerge, DATA_ENTITIES, ENTITY_LABELS } from '../utils/dataTransform.js';
 
 const props = defineProps({
   spaceData: {
@@ -75,6 +87,8 @@ const fileInput = ref(null);
 const isDragging = ref(false);
 const previewResult = ref(null);
 const importSuccess = ref(false);
+const importStats = ref(null);
+const defaultImportMode = ref('overwrite');
 const selectedExportEntities = ref([...DATA_ENTITIES]);
 
 const exportEntities = computed(() => {
@@ -133,6 +147,7 @@ function handleDrop(event) {
 
 async function processFile(file) {
   importSuccess.value = false;
+  importStats.value = null;
   try {
     const text = await readFileAsText(file);
     const rawData = safeParseJSON(text, null);
@@ -146,7 +161,7 @@ async function processFile(file) {
       };
       return;
     }
-    previewResult.value = validateAndNormalizeImportData(rawData);
+    previewResult.value = validateAndNormalizeForMerge(rawData, props.spaceData);
   } catch (e) {
     previewResult.value = {
       valid: false,
@@ -166,11 +181,24 @@ function cancelImport() {
   }
 }
 
-function confirmImport(normalizedData) {
-  if (!confirm('确定要导入数据吗？此操作将覆盖当前空间中对应的数据，不可撤销。')) {
+function confirmImport({ data, mode, mergeAnalysis }) {
+  const isMerge = mode === 'merge';
+  const confirmMsg = isMerge
+    ? '确定要合并导入数据吗？此操作将根据匹配规则新增、更新或跳过记录，不可撤销。'
+    : '确定要覆盖导入数据吗？此操作将覆盖当前空间中对应的数据，不可撤销。';
+
+  if (!confirm(confirmMsg)) {
     return;
   }
-  emit('imported', normalizedData);
+
+  emit('imported', { data, mode, mergeAnalysis });
+
+  if (isMerge && mergeAnalysis) {
+    importStats.value = mergeAnalysis.summary;
+  } else {
+    importStats.value = null;
+  }
+
   importSuccess.value = true;
   previewResult.value = null;
   if (fileInput.value) {
@@ -178,7 +206,8 @@ function confirmImport(normalizedData) {
   }
   setTimeout(() => {
     importSuccess.value = false;
-  }, 3000);
+    importStats.value = null;
+  }, 5000);
 }
 </script>
 
@@ -350,6 +379,32 @@ function confirmImport(normalizedData) {
   font-size: 14px;
   text-align: center;
   animation: fadeIn 0.3s ease;
+}
+
+.import-stats {
+  text-align: left;
+}
+
+.import-stats strong {
+  display: block;
+  margin-bottom: 8px;
+  text-align: center;
+  font-size: 15px;
+}
+
+.stats-row {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.stats-row span {
+  background: rgba(255, 255, 255, 0.5);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-weight: 500;
 }
 
 @keyframes fadeIn {
