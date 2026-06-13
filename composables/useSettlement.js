@@ -11,7 +11,13 @@ import {
   updateMemberNotes,
   syncDepositChanges,
   getSettlementStats,
-  SETTLEMENT_STATUSES
+  SETTLEMENT_STATUSES,
+  getSettlementWrapupStatus,
+  refreshSettlementFromSources,
+  markInventoryDeductionAsHandled,
+  updateAllPaymentsToPaid,
+  canFinalizeSettlement,
+  finalizeSettlement
 } from '../utils/settlementTransform.js';
 
 function resolve(val) {
@@ -152,6 +158,60 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
     return { ...record, ...updates, updatedAt: new Date().toISOString().slice(0, 10) };
   }
 
+  function getWrapupStatus(settlementId) {
+    const record = records.value.find((s) => s.id === settlementId);
+    return getSettlementWrapupStatus(record);
+  }
+
+  function refreshFromAllSources(settlementId) {
+    const record = records.value.find((s) => s.id === settlementId);
+    if (!record) return null;
+    const trip = record.tripId ? tripList.value.find((t) => t.id === record.tripId) : null;
+    const tripGears = trip ? (trip.gears || []) : [];
+    const tripRequestIds = getTripRequestIds(trip);
+    return refreshSettlementFromSources(
+      record,
+      depositList.value,
+      inventoryList.value,
+      tripGears,
+      tripRequestIds
+    );
+  }
+
+  function handleInventoryDeduction(settlementId, inventoryActionId, shouldDeduct = true) {
+    const record = records.value.find((s) => s.id === settlementId);
+    if (!record) return null;
+    return markInventoryDeductionAsHandled(record, inventoryActionId, shouldDeduct);
+  }
+
+  function markAllPaid(settlementId) {
+    const record = records.value.find((s) => s.id === settlementId);
+    if (!record) return null;
+    return updateAllPaymentsToPaid(record);
+  }
+
+  function canFinalize(settlementId) {
+    const record = records.value.find((s) => s.id === settlementId);
+    return canFinalizeSettlement(record);
+  }
+
+  function finalize(settlementId) {
+    const record = records.value.find((s) => s.id === settlementId);
+    if (!record) return null;
+    if (!canFinalizeSettlement(record)) return null;
+    return finalizeSettlement(record);
+  }
+
+  function getByTripId(tripId) {
+    return records.value.find((s) => s.tripId === tripId) || null;
+  }
+
+  function getOrCreateForTrip(tripId) {
+    const existing = records.value.find((s) => s.tripId === tripId);
+    if (existing) return existing;
+    return createForTrip(tripId);
+  }
+
   return {
     records,
     settlementCount,
@@ -171,6 +231,14 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
     getStats,
     getById,
     updateStatus,
-    updateInfo
+    updateInfo,
+    getWrapupStatus,
+    refreshFromAllSources,
+    handleInventoryDeduction,
+    markAllPaid,
+    canFinalize,
+    finalize,
+    getByTripId,
+    getOrCreateForTrip
   };
 }

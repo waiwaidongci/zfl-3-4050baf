@@ -351,3 +351,82 @@ export function getSettlementStats(settlement) {
     partialMembers
   };
 }
+
+export function getSettlementWrapupStatus(settlement) {
+  if (!settlement) return null;
+  const stats = getSettlementStats(settlement);
+  return {
+    hasSettlement: true,
+    status: settlement.status,
+    allPaid: stats.paidMembers === stats.memberCount,
+    hasUnpaid: stats.unpaidMembers > 0,
+    hasPartial: stats.partialMembers > 0,
+    hasExpenses: (settlement.extraExpenses || []).length > 0,
+    hasDepositDeductions: settlement.members.some((m) =>
+      (m.depositItems || []).some((d) => Number(d.actualDeduct) > 0)
+    ),
+    totalUnpaid: stats.totalUnpaid,
+    memberCount: stats.memberCount,
+    paidCount: stats.paidMembers
+  };
+}
+
+export function refreshSettlementFromSources(
+  settlement,
+  depositRecords,
+  inventoryLists,
+  tripGears = [],
+  tripRequestIds = null
+) {
+  if (!settlement) return null;
+  const synced = syncDepositChanges(settlement, depositRecords, tripGears, tripRequestIds, inventoryLists);
+  return calculateSettlement(synced);
+}
+
+export function markInventoryDeductionAsHandled(
+  settlement,
+  inventoryActionId,
+  shouldDeduct = true
+) {
+  if (!settlement) return null;
+  const members = settlement.members.map((sm) => {
+    const depositItems = sm.depositItems.map((d) => {
+      if (d.source === 'inventory' && d.depositId === `inv-${inventoryActionId}`) {
+        return {
+          ...d,
+          actualDeduct: shouldDeduct ? d.deductedAmount : '0',
+          pending: false
+        };
+      }
+      return d;
+    });
+    return { ...sm, depositItems };
+  });
+  return calculateSettlement({ ...settlement, members });
+}
+
+export function updateAllPaymentsToPaid(settlement) {
+  if (!settlement) return null;
+  const members = settlement.members.map((sm) => ({
+    ...sm,
+    paidAmount: sm.totalOwed,
+    paymentStatus: '已支付'
+  }));
+  return calculateSettlement({ ...settlement, members });
+}
+
+export function canFinalizeSettlement(settlement) {
+  if (!settlement) return false;
+  if (settlement.status === '已结算') return false;
+  const status = getSettlementWrapupStatus(settlement);
+  return status.allPaid;
+}
+
+export function finalizeSettlement(settlement) {
+  if (!settlement) return null;
+  return {
+    ...settlement,
+    status: '已结算',
+    updatedAt: new Date().toISOString().slice(0, 10)
+  };
+}

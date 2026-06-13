@@ -6,7 +6,16 @@ import InventoryPanel from './components/InventoryPanel.vue';
 import SettlementPanel from './components/SettlementPanel.vue';
 import ReservationPanel from './components/ReservationPanel.vue';
 import EventTimeline from './components/EventTimeline.vue';
-import { propagateMemberRename, cleanupDeletedTrip } from './utils/settlementTransform.js';
+import TripWrapUpWizard from './components/TripWrapUpWizard.vue';
+import { useTripWrapUp } from './composables/useTripWrapUp.js';
+import { applyAbnormalDeductionToDeposit } from './utils/inventoryTransform.js';
+import {
+  propagateMemberRename,
+  cleanupDeletedTrip,
+  linkDepositsToSettlement,
+  calculateSettlement,
+  getSettlementStats
+} from './utils/settlementTransform.js';
 import { normalizeGears } from './utils/dataTransform.js';
 import { useReservation } from './composables/useReservation.js';
 import { computeQueuePositions, expireOutdatedReservations, recalcAllPriorities } from './utils/reservationTransform.js';
@@ -855,6 +864,21 @@ const reservationHelper = useReservation({
   healthInfoMap: healthInfoMap
 });
 
+const tripWrapUp = useTripWrapUp({
+  trips: trips,
+  members: members,
+  gears: gears,
+  requests: requests,
+  handoverRecords: handoverRecords,
+  depositRecords: depositRecords,
+  inventoryLists: inventoryLists,
+  settlementRecords: settlementRecords,
+  currentUser: currentUser
+});
+
+const wrapUpSelectedTripId = ref(null);
+const wrapUpEditingInventoryId = ref(null);
+const wrapUpEditingSettlementId = ref(null);
 const pendingReviewNotification = ref(null);
 
 function triggerReservationCheck() {
@@ -3341,6 +3365,431 @@ function getCalendarHighlightTooltip(rowKey, rowType, dateStr) {
 
   return `${highlight.count} 项候补待审核 | ${statuses.join('、')} | 最高优先级 ${highlight.maxPriority}`;
 }
+
+function handleWrapUpSelectTrip(tripId) {
+  wrapUpSelectedTripId.value = tripId;
+  tripWrapUp.selectTrip(tripId);
+  wrapUpEditingInventoryId.value = null;
+  wrapUpEditingSettlementId.value = null;
+}
+
+function handleWrapUpReturn(handoverId) {
+  const handover = handoverRecords.value.find((h) => h.id === handoverId);
+  if (!handover) return;
+  const req = requests.value.find((r) => r.id === handover.requestId);
+  if (req) {
+    req.status = '已归还';
+    req.returnDate = new Date().toISOString().slice(0, 10);
+    logEvent({
+      entityType: 'request',
+      entityId: req.id,
+      entityName: req.gearName,
+      action: 'mark_returned',
+      beforeState: { status: req.status },
+      afterState: { status: '已归还', returnDate: req.returnDate },
+      sourcePage: '出行收尾',
+      notes: '从出行收尾向导标记归还'
+    });
+  }
+  const returnHandover = {
+    id: crypto.randomUUID(),
+    type: '归还',
+    requestId: handover.requestId,
+    gearId: handover.gearId,
+    gearName: handover.gearName,
+    owner: handover.owner,
+    borrower: handover.borrower,
+    gearStatus: '完好',
+    deposit: handover.deposit || '',
+    accessories: '',
+    handoverNotes: '从向导归还',
+    damageRecord: '',
+    deductAmount: '',
+    deductReason: '',
+    ownerConfirmed: true,
+    borrowerConfirmed: true,
+    returnedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString().slice(0, 10)
+  };
+  handoverRecords.value = [...handoverRecords.value, returnHandover];
+  logEvent({
+    entityType: 'handover',
+    entityId: returnHandover.id,
+    entityName: `${handover.gearName} - 归还`,
+    action: 'create',
+    afterState: returnHandover,
+    sourcePage: '出行收尾',
+    notes: '从出行收尾向导创建归还交接单'
+  });
+  alert(`${handover.gearName} 已标记归还`);
+}
+
+function handleWrapUpCreateInventory(tripId) {
+  const trip = trips.value.find((t) => t.id === tripId);
+  if (!trip) return;
+  const tripGears = trip.gears || [];
+  if (tripGears.length === 0) {
+    alert('该出行没有装备，无需盘点');
+    return;
+  }
+  const newList = {
+    id: crypto.randomUUID(),
+    name: `${trip.destination} - 出行后盘点`,
+    type: '出行后',
+    date: new Date().toISOString().slice(0, 10),
+    tripId: tripId,
+    status: '盘点中',
+    items: tripGears.map((tg) => ({
+      id: crypto.randomUUID(),
+      gearId: tg.gearId,
+      gearName: tg.gearName,
+      category: tg.category || '',
+      owner: tg.owner || '',
+      user: tg.user || tg.owner || '',
+      planCount: tg.count || 1,
+      actualCount: '',
+      checkStatus: '待盘点',
+      checkNotes: '',
+      hasAbnormal: false,
+      abnormalActions: []
+    })),
+    createdAt: new Date().toISOString().slice(0, 10),
+    createdBy: currentUser.value,
+    notes: '从出行收尾向导创建'
+  };
+  inventoryLists.value = [newList, ...inventoryLists.value];
+  wrapUpEditingInventoryId.value = newList.id;
+  logEvent({
+    entityType: 'inventory',
+    entityId: newList.id,
+    entityName: newList.name,
+    action: 'create',
+    afterState: newList,
+    sourcePage: '出行收尾',
+    notes: '从出行收尾向导创建盘点单',
+    relatedEntityType: 'trip',
+    relatedEntityId: tripId,
+    relatedEntityName: trip.destination
+  });
+}
+
+function handleWrapUpOpenInventory(inventoryId) {
+  wrapUpEditingInventoryId.value = inventoryId;
+  tab.value = '装备盘点';
+}
+
+function handleWrapUpConfirmDeduct(abnormalAction) {
+  if (!confirm(`确认将「${abnormalAction.gearName}」的 ${abnormalAction.amount} 元盘点异常转为押金扣除？`)) {
+    return;
+  }
+  const result = applyAbnormalDeductionToDeposit(abnormalAction, depositRecords.value, requests.value);
+  if (result.type === 'create') {
+    depositRecords.value = [...depositRecords.value, result.deposit];
+    logEvent({
+      entityType: 'deposit',
+      entityId: result.deposit.id,
+      entityName: `${result.deposit.gearName} - ${result.deposit.borrower}`,
+      action: 'create',
+      afterState: result.deposit,
+      sourcePage: '出行收尾',
+      notes: `从盘点异常转换：${result.action.description}`,
+      relatedEntityType: 'inventory',
+      relatedEntityId: result.action.inventoryId,
+      relatedEntityName: result.action.inventoryName
+    });
+  } else {
+    const idx = depositRecords.value.findIndex((d) => d.id === result.deposit.id);
+    if (idx !== -1) {
+      const beforeState = { ...depositRecords.value[idx] };
+      depositRecords.value[idx] = result.deposit;
+      logEvent({
+        entityType: 'deposit',
+        entityId: result.deposit.id,
+        entityName: `${result.deposit.gearName} - ${result.deposit.borrower}`,
+        action: 'update',
+        beforeState,
+        afterState: result.deposit,
+        sourcePage: '出行收尾',
+        notes: `从盘点异常增加扣除：${result.action.amount} 元 - ${result.action.description}`,
+        relatedEntityType: 'inventory',
+        relatedEntityId: result.action.inventoryId,
+        relatedEntityName: result.action.inventoryName
+      });
+    }
+  }
+  const inventoryList = inventoryLists.value.find((l) => l.id === abnormalAction.inventoryId);
+  if (inventoryList) {
+    for (const item of inventoryList.items) {
+      const actionIdx = (item.abnormalActions || []).findIndex((a) => a.id === abnormalAction.id);
+      if (actionIdx !== -1) {
+        item.abnormalActions[actionIdx].status = '已处理';
+        item.abnormalActions[actionIdx].handledAt = new Date().toISOString().slice(0, 10);
+      }
+    }
+    inventoryLists.value = [...inventoryLists.value];
+  }
+  alert('已确认押金扣除');
+}
+
+function handleWrapUpOpenDeposit(depositId) {
+  tab.value = '押金台账';
+}
+
+function handleWrapUpCreateSettlement(tripId) {
+  const trip = trips.value.find((t) => t.id === tripId);
+  if (!trip) return;
+  const existingSettlement = settlementRecords.value.find((s) => s.tripId === tripId);
+  if (existingSettlement) {
+    if (!confirm(`该出行已有结算单，是否从押金、盘点等数据源刷新？`)) {
+      return;
+    }
+    handleWrapUpRefreshSettlement(existingSettlement.id);
+    return;
+  }
+  const tripMembers = trip.members || [];
+  const tripGears = trip.gears || [];
+  const tripRequestIds = requests.value
+    .filter((r) => r.tripId === tripId)
+    .map((r) => r.id);
+  const tripDeposits = depositRecords.value.filter(
+    (d) => d.requestId && tripRequestIds.includes(d.requestId)
+  );
+  const newSettlement = {
+    id: crypto.randomUUID(),
+    tripId: tripId,
+    tripName: trip.destination,
+    startDate: trip.startDate,
+    endDate: trip.endDate,
+    status: '草稿',
+    totalDeposit: '0',
+    totalReceived: '0',
+    totalDeducted: '0',
+    totalRefunded: '0',
+    totalExpenses: '0',
+    totalPerMember: '0',
+    totalPaid: '0',
+    totalUnpaid: '0',
+    members: tripMembers.map((m) => ({
+      nickname: typeof m === 'string' ? m : m.nickname,
+      phone: typeof m === 'object' ? m.phone : '',
+      depositItems: [],
+      extraExpenses: [],
+      depositTotal: '0',
+      depositReceived: '0',
+      depositDeducted: '0',
+      depositRefundable: '0',
+      expenseShare: '0',
+      totalOwed: '0',
+      paidAmount: '0',
+      paymentStatus: '未支付',
+      notes: ''
+    })),
+    extraExpenses: [],
+    inventoryDeductions: [],
+    createdAt: new Date().toISOString().slice(0, 10),
+    updatedAt: new Date().toISOString().slice(0, 10),
+    createdBy: currentUser.value,
+    notes: '从出行收尾向导创建'
+  };
+  let linked = { ...newSettlement };
+  if (tripDeposits.length > 0) {
+    linked = linkDepositsToSettlement(linked, tripDeposits, tripGears, tripRequestIds);
+  }
+  const tripInventories = inventoryLists.value.filter(
+    (l) => l.tripId === tripId && l.type === '出行后'
+  );
+  if (tripInventories.length > 0) {
+    let deductions = [];
+    for (const list of tripInventories) {
+      for (const item of list.items) {
+        for (const action of item.abnormalActions || []) {
+          if (action.type === '押金扣除') {
+            deductions.push({
+              actionId: action.id,
+              inventoryId: list.id,
+              inventoryName: list.name,
+              itemId: item.id,
+              gearId: item.gearId,
+              gearName: item.gearName,
+              borrower: action.borrower || item.owner,
+              amount: action.amount,
+              description: action.description,
+              status: action.status
+            });
+          }
+        }
+      }
+    }
+    if (deductions.length > 0) {
+      linked.inventoryDeductions = deductions;
+      for (const ded of deductions) {
+        const member = linked.members.find((m) => m.nickname === ded.borrower);
+        if (member) {
+          member.depositItems.push({
+            depositId: `inv-${ded.actionId}`,
+            gearId: ded.gearId,
+            gearName: ded.gearName,
+            depositAmount: '0',
+            receivedAmount: '0',
+            deductedAmount: ded.amount,
+            actualDeduct: ded.status === '已处理' ? ded.amount : '0',
+            refundedAmount: '0',
+            refundable: '0',
+            source: 'inventory',
+            pending: ded.status !== '已处理',
+            notes: ded.description || ''
+          });
+        }
+      }
+    }
+  }
+  const calculated = calculateSettlement(linked);
+  settlementRecords.value = [calculated, ...settlementRecords.value];
+  wrapUpEditingSettlementId.value = calculated.id;
+  logEvent({
+    entityType: 'settlement',
+    entityId: calculated.id,
+    entityName: calculated.tripName,
+    action: 'create',
+    afterState: calculated,
+    sourcePage: '出行收尾',
+    notes: '从出行收尾向导创建结算单',
+    relatedEntityType: 'trip',
+    relatedEntityId: tripId,
+    relatedEntityName: trip.destination
+  });
+}
+
+function handleWrapUpOpenSettlement(settlementId) {
+  wrapUpEditingSettlementId.value = settlementId;
+  tab.value = '费用结算';
+}
+
+function handleWrapUpRefreshSettlement(settlementId) {
+  const settlement = settlementRecords.value.find((s) => s.id === settlementId);
+  if (!settlement) return;
+  const trip = trips.value.find((t) => t.id === settlement.tripId);
+  const tripGears = trip ? (trip.gears || []) : [];
+  const tripRequestIds = requests.value
+    .filter((r) => r.tripId === settlement.tripId)
+    .map((r) => r.id);
+  const tripDeposits = depositRecords.value.filter(
+    (d) => d.requestId && tripRequestIds.includes(d.requestId)
+  );
+  const tripInventories = inventoryLists.value.filter(
+    (l) => l.tripId === settlement.tripId && l.type === '出行后'
+  );
+  let updated = { ...settlement };
+  if (tripDeposits.length > 0) {
+    updated = linkDepositsToSettlement(updated, tripDeposits, tripGears, tripRequestIds);
+  }
+  if (tripInventories.length > 0) {
+    let deductions = [];
+    for (const list of tripInventories) {
+      for (const item of list.items) {
+        for (const action of item.abnormalActions || []) {
+          if (action.type === '押金扣除') {
+            deductions.push({
+              actionId: action.id,
+              inventoryId: list.id,
+              inventoryName: list.name,
+              itemId: item.id,
+              gearId: item.gearId,
+              gearName: item.gearName,
+              borrower: action.borrower || item.owner,
+              amount: action.amount,
+              description: action.description,
+              status: action.status
+            });
+          }
+        }
+      }
+    }
+    updated.inventoryDeductions = deductions;
+    for (const ded of deductions) {
+      const member = updated.members.find((m) => m.nickname === ded.borrower);
+      if (member) {
+        const existingIdx = member.depositItems.findIndex(
+          (d) => d.depositId === `inv-${ded.actionId}`
+        );
+        if (existingIdx === -1) {
+          member.depositItems.push({
+            depositId: `inv-${ded.actionId}`,
+            gearId: ded.gearId,
+            gearName: ded.gearName,
+            depositAmount: '0',
+            receivedAmount: '0',
+            deductedAmount: ded.amount,
+            actualDeduct: ded.status === '已处理' ? ded.amount : '0',
+            refundedAmount: '0',
+            refundable: '0',
+            source: 'inventory',
+            pending: ded.status !== '已处理',
+            notes: ded.description || ''
+          });
+        } else {
+          member.depositItems[existingIdx] = {
+            ...member.depositItems[existingIdx],
+            deductedAmount: ded.amount,
+            actualDeduct: ded.status === '已处理' ? ded.amount : '0',
+            pending: ded.status !== '已处理'
+          };
+        }
+      }
+    }
+  }
+  const calculated = calculateSettlement(updated);
+  calculated.updatedAt = new Date().toISOString().slice(0, 10);
+  const idx = settlementRecords.value.findIndex((s) => s.id === settlementId);
+  if (idx !== -1) {
+    const beforeState = { ...settlementRecords.value[idx] };
+    settlementRecords.value[idx] = calculated;
+    logEvent({
+      entityType: 'settlement',
+      entityId: calculated.id,
+      entityName: calculated.tripName,
+      action: 'refresh',
+      beforeState,
+      afterState: calculated,
+      sourcePage: '出行收尾',
+      notes: '从出行收尾向导刷新结算单，同步了押金和盘点数据'
+    });
+  }
+  alert('结算单已刷新');
+}
+
+function handleWrapUpFinalizeSettlement(settlementId) {
+  const settlement = settlementRecords.value.find((s) => s.id === settlementId);
+  if (!settlement) return;
+  const stats = getSettlementStats(settlement);
+  if (stats && stats.unpaidMembers > 0) {
+    alert(`还有 ${stats.unpaidMembers} 位成员未付款，无法完成结算`);
+    return;
+  }
+  if (!confirm('确认所有款项已结清，将结算单标记为"已结算"？此操作不可撤销。')) {
+    return;
+  }
+  const idx = settlementRecords.value.findIndex((s) => s.id === settlementId);
+  if (idx !== -1) {
+    const beforeState = { ...settlementRecords.value[idx] };
+    settlementRecords.value[idx] = {
+      ...settlementRecords.value[idx],
+      status: '已结算',
+      updatedAt: new Date().toISOString().slice(0, 10)
+    };
+    logEvent({
+      entityType: 'settlement',
+      entityId: settlementId,
+      entityName: settlementRecords.value[idx].tripName,
+      action: 'finalize',
+      beforeState,
+      afterState: settlementRecords.value[idx],
+      sourcePage: '出行收尾',
+      notes: '从出行收尾向导完成结算，标记为已结算'
+    });
+    alert('🎉 出行结算已完成！');
+  }
+}
 </script>
 
 <template>
@@ -3443,7 +3892,7 @@ function getCalendarHighlightTooltip(rowKey, rowType, dateStr) {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','装备推荐','申请列表','预约排程','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','费用结算','成员资料','我的借出','我的借入','操作时间线','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','装备推荐','申请列表','预约排程','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','费用结算','出行收尾','成员资料','我的借出','我的借入','操作时间线','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -4336,6 +4785,26 @@ function getCalendarHighlightTooltip(rowKey, rowType, dateStr) {
       @update:settlement-records="val => settlementRecords = val"
       @log-event="logEvent"
       @view-timeline="(filter) => navigateToTimeline(filter)"
+    />
+
+    <TripWrapUpWizard
+      v-if="tab === '出行收尾'"
+      :trips="trips"
+      :trip-wrap-up="tripWrapUp"
+      :selected-trip-id="wrapUpSelectedTripId"
+      :editing-inventory-id="wrapUpEditingInventoryId"
+      :editing-settlement-id="wrapUpEditingSettlementId"
+      :current-user="currentUser"
+      @select-trip="handleWrapUpSelectTrip"
+      @handle-return="handleWrapUpReturn"
+      @create-inventory="handleWrapUpCreateInventory"
+      @open-inventory="handleWrapUpOpenInventory"
+      @confirm-deduct="handleWrapUpConfirmDeduct"
+      @open-deposit="handleWrapUpOpenDeposit"
+      @create-settlement="handleWrapUpCreateSettlement"
+      @open-settlement="handleWrapUpOpenSettlement"
+      @refresh-settlement="handleWrapUpRefreshSettlement"
+      @finalize-settlement="handleWrapUpFinalizeSettlement"
     />
 
     <EventTimeline
