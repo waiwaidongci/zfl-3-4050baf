@@ -110,6 +110,12 @@
               >
                 手动转正
               </button>
+              <button
+                class="ghost small"
+                @click="emit('view-timeline', { entityType: 'reservation', entityId: reservation.id, entityName: reservation.gearName || '' })"
+              >
+                📋 时间线
+              </button>
             </div>
           </article>
         </div>
@@ -183,7 +189,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:reservations', 'create-request', 'log-event']);
+const emit = defineEmits(['update:reservations', 'create-request', 'log-event', 'view-timeline']);
 
 const statusFilter = ref('全部状态');
 const gearFilter = ref('全部装备');

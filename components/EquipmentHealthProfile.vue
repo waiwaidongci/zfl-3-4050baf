@@ -2,6 +2,7 @@
   <div class="equipment-health-profile">
     <div class="profile-header">
       <button class="close-btn ghost" @click="$emit('close')">✕ 关闭档案</button>
+      <button class="timeline-btn ghost" @click="$emit('view-timeline', gearId)">📋 查看时间线</button>
     </div>
 
     <div v-if="!gear" class="profile-empty">
@@ -221,7 +222,7 @@ const props = defineProps({
   }
 });
 
-defineEmits(['close', 'create-maintenance']);
+defineEmits(['close', 'create-maintenance', 'view-timeline']);
 
 const gearIdRef = computed(() => props.gearId);
 
@@ -279,11 +280,25 @@ function getCategoryIcon(category) {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 12px;
+  gap: 8px;
 }
 
 .close-btn {
   padding: 6px 14px;
   font-size: 13px;
+}
+
+.timeline-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  background: #2f4a2c;
+  color: #fff;
+  border-color: #2f4a2c;
+}
+
+.timeline-btn:hover {
+  background: #3d5c37;
+  border-color: #3d5c37;
 }
 
 .profile-empty {

@@ -286,7 +286,7 @@ export function useEventLog({ eventLogs, currentUser }) {
       .slice(0, limit);
   }
 
-  function filterEvents({ entityTypes = [], actions = [], actor = '', searchText = '', startDate = '', endDate = '' }) {
+  function filterEvents({ entityTypes = [], actions = [], actor = '', searchText = '', startDate = '', endDate = '', entityId = '', entityName = '', relatedEntityType = '', relatedEntityId = '', gearId = '', memberName = '' }) {
     const safeLogs = getSafeLogs();
     let result = [...safeLogs];
 
@@ -298,6 +298,33 @@ export function useEventLog({ eventLogs, currentUser }) {
     }
     if (actor) {
       result = result.filter((e) => e.actor === actor);
+    }
+    if (entityId) {
+      result = result.filter((e) => e.entityId === entityId);
+    }
+    if (entityName) {
+      const lower = String(entityName).toLowerCase();
+      result = result.filter((e) => e.entityName && String(e.entityName).toLowerCase().includes(lower));
+    }
+    if (relatedEntityType) {
+      result = result.filter((e) => e.relatedEntityType === relatedEntityType);
+    }
+    if (relatedEntityId) {
+      result = result.filter((e) => e.relatedEntityId === relatedEntityId);
+    }
+    if (gearId) {
+      result = result.filter((e) =>
+        (e.entityType === 'gear' && e.entityId === gearId) ||
+        (e.relatedEntityType === 'gear' && e.relatedEntityId === gearId)
+      );
+    }
+    if (memberName) {
+      const lower = String(memberName).toLowerCase();
+      result = result.filter((e) =>
+        (e.entityType === 'member' && e.entityName && String(e.entityName).toLowerCase().includes(lower)) ||
+        (e.actor && String(e.actor).toLowerCase() === lower) ||
+        (e.relatedEntityType === 'member' && e.relatedEntityName && String(e.relatedEntityName).toLowerCase().includes(lower))
+      );
     }
     if (searchText) {
       const lower = String(searchText).toLowerCase();

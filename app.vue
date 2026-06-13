@@ -923,6 +923,7 @@ function handleReservationActivated(reservation) {
 
 const showHealthProfile = ref(false);
 const currentHealthGearId = ref('');
+const timelineFilterContext = ref(null);
 const tab = ref('装备库');
 const category = ref('全部分类');
 const requestFilter = ref('全部申请');
@@ -3163,6 +3164,43 @@ function closeHealthProfile() {
   currentHealthGearId.value = '';
 }
 
+function navigateToTimeline(filter) {
+  timelineFilterContext.value = filter ? { ...filter } : null;
+  tab.value = '操作时间线';
+}
+
+function clearTimelineContext() {
+  timelineFilterContext.value = null;
+}
+
+function viewGearTimeline(gearId) {
+  navigateToTimeline({
+    gearId
+  });
+}
+
+function viewMemberTimeline(memberName) {
+  navigateToTimeline({
+    memberName
+  });
+}
+
+function viewSettlementTimeline(settlementId, settlementName) {
+  navigateToTimeline({
+    entityType: 'settlement',
+    entityId: settlementId,
+    entityName: settlementName || ''
+  });
+}
+
+function viewReservationTimeline(reservationId, gearName) {
+  navigateToTimeline({
+    entityType: 'reservation',
+    entityId: reservationId,
+    entityName: gearName || ''
+  });
+}
+
 function handleReservationPanelUpdate(newList) {
   reservations.value = newList;
 }
@@ -3698,6 +3736,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
         @update:reservations="handleReservationPanelUpdate"
         @create-request="handleReservationPanelCreateRequest"
         @log-event="logEvent"
+        @view-timeline="(filter) => navigateToTimeline(filter)"
       />
     </section>
 
@@ -4156,6 +4195,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       :current-user="currentUser"
       @update:settlement-records="val => settlementRecords = val"
       @log-event="logEvent"
+      @view-timeline="(filter) => navigateToTimeline(filter)"
     />
 
     <EventTimeline
@@ -4164,6 +4204,8 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       :members="members"
       :gears="gears"
       :current-user="currentUser"
+      :initial-filter="timelineFilterContext"
+      @clear-context="clearTimelineContext"
     />
 
     <section v-if="tab === '我的借出' || tab === '我的借入'" class="panel">
@@ -4321,6 +4363,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
           :inventory-lists="inventoryLists"
           @close="closeHealthProfile"
           @create-maintenance="handleCreateMaintenanceFromProfile"
+          @view-timeline="viewGearTimeline"
         />
       </div>
     </div>

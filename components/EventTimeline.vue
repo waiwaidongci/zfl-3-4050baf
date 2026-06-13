@@ -3,14 +3,24 @@
     <div class="panel">
       <div class="panel-header">
         <h2>📋 操作时间线</h2>
-        <div class="stats-row" v-if="stats.total > 0">
-          <span class="stat-item">共 {{ stats.total }} 条记录</span>
+        <div class="header-actions">
+          <div class="stats-row" v-if="stats.total > 0">
+            <span class="stat-item">共 {{ stats.total }} 条记录</span>
+            <span v-if="filteredCount !== stats.total" class="stat-item filtered">筛选出 {{ filteredCount }} 条</span>
+          </div>
+          <button v-if="hasActiveFilter" class="clear-filter-btn" @click="clearAllFilters">✕ 清除筛选</button>
         </div>
+      </div>
+
+      <div v-if="contextLabel" class="context-banner">
+        <span class="context-icon">🔗</span>
+        <span>上下文筛选：{{ contextLabel }}</span>
+        <button class="context-clear" @click="clearContext">✕ 关闭</button>
       </div>
 
       <div class="filters">
         <div class="filter-group">
-          <label>筛选类型：</label>
+          <label>实体类型：</label>
           <div class="filter-chips">
             <span
               v-for="(label, key) in entityTypeOptions"
@@ -25,23 +35,70 @@
         </div>
 
         <div class="filter-group">
-          <label>操作人：</label>
-          <select v-model="selectedActor" class="filter-select">
-            <option value="">全部</option>
-            <option v-for="actor in actorOptions" :key="actor" :value="actor">
-              {{ actor }}
-            </option>
-          </select>
+          <label>动作类型：</label>
+          <div class="filter-chips action-chips">
+            <span
+              v-for="(label, key) in actionTypeOptions"
+              :key="key"
+              class="filter-chip action-chip"
+              :class="{ active: selectedActionTypes.includes(key) }"
+              @click="toggleActionType(key)"
+            >
+              {{ label }}
+            </span>
+          </div>
         </div>
 
-        <div class="filter-group">
-          <label>搜索：</label>
-          <input
-            v-model="searchText"
-            type="text"
-            class="filter-input"
-            placeholder="搜索操作对象或备注..."
-          />
+        <div class="filter-row">
+          <div class="filter-group">
+            <label>成员：</label>
+            <select v-model="selectedMember" class="filter-select">
+              <option value="">全部成员</option>
+              <option v-for="member in memberOptions" :key="member" :value="member">
+                {{ member }}
+              </option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label>装备：</label>
+            <select v-model="selectedGear" class="filter-select">
+              <option value="">全部装备</option>
+              <option v-for="gear in gearOptions" :key="gear.id" :value="gear.id">
+                {{ gear.name }}（{{ gear.owner }}）
+              </option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label>操作人：</label>
+            <select v-model="selectedActor" class="filter-select">
+              <option value="">全部</option>
+              <option v-for="actor in actorOptions" :key="actor" :value="actor">
+                {{ actor }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="filter-row">
+          <div class="filter-group">
+            <label>开始日期：</label>
+            <input v-model="startDate" type="date" class="filter-date" />
+          </div>
+          <div class="filter-group">
+            <label>结束日期：</label>
+            <input v-model="endDate" type="date" class="filter-date" />
+          </div>
+          <div class="filter-group">
+            <label>搜索：</label>
+            <input
+              v-model="searchText"
+              type="text"
+              class="filter-input"
+              placeholder="搜索操作对象或备注..."
+            />
+          </div>
         </div>
       </div>
 
@@ -108,8 +165,9 @@
 
       <div class="empty-state" v-else>
         <div class="empty-icon">📭</div>
-        <p>暂无操作记录</p>
-        <p class="empty-desc">执行操作后会自动记录在此</p>
+        <p>暂无匹配的操作记录</p>
+        <p class="empty-desc" v-if="hasActiveFilter">尝试调整筛选条件或清除筛选</p>
+        <p class="empty-desc" v-else>执行操作后会自动记录在此</p>
       </div>
     </div>
   </section>
@@ -135,17 +193,28 @@ const props = defineProps({
   currentUser: {
     type: String,
     default: ''
+  },
+  initialFilter: {
+    type: Object,
+    default: () => null
   }
 });
 
-const emit = defineEmits([]);
+const emit = defineEmits(['clear-context']);
 
 const PAGE_SIZE = 50;
 
 const selectedEntityTypes = ref([]);
+const selectedActionTypes = ref([]);
 const selectedActor = ref('');
+const selectedMember = ref('');
+const selectedGear = ref('');
 const searchText = ref('');
+const startDate = ref('');
+const endDate = ref('');
 const displayCount = ref(PAGE_SIZE);
+
+const contextFilter = ref(null);
 
 const eventLogsRef = toRef(props, 'eventLogs');
 const currentUserRef = toRef(props, 'currentUser');
@@ -178,6 +247,8 @@ const stats = computed(() => {
 
 const entityTypeOptions = EVENT_ENTITY_TYPES;
 
+const actionTypeOptions = EVENT_ACTIONS;
+
 const actorOptions = computed(() => {
   const actors = new Set();
   const logs = safeEventLogs.value;
@@ -187,18 +258,70 @@ const actorOptions = computed(() => {
   return Array.from(actors).sort();
 });
 
+const memberOptions = computed(() => {
+  return props.members.map((m) => m.nickname).filter(Boolean).sort();
+});
+
+const gearOptions = computed(() => {
+  return props.gears.map((g) => ({ id: g.id, name: g.name, owner: g.owner || '' }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+});
+
+const contextLabel = computed(() => {
+  const cf = contextFilter.value;
+  if (!cf) return '';
+  const parts = [];
+  if (cf.gearId) {
+    const gear = props.gears.find((g) => g.id === cf.gearId);
+    parts.push(`装备「${gear ? gear.name : cf.gearId}」`);
+  }
+  if (cf.memberName) parts.push(`成员「${cf.memberName}」`);
+  if (cf.entityType && EVENT_ENTITY_TYPES[cf.entityType]) {
+    parts.push(`类型：${EVENT_ENTITY_TYPES[cf.entityType]}`);
+  }
+  if (cf.entityId && cf.entityName) parts.push(`「${cf.entityName}」`);
+  if (cf.relatedEntityType === 'settlement') parts.push('关联结算单');
+  if (cf.relatedEntityType === 'reservation') parts.push('关联候补');
+  return parts.join(' · ') || '已设定筛选';
+});
+
+const hasActiveFilter = computed(() => {
+  return selectedEntityTypes.value.length > 0
+    || selectedActionTypes.value.length > 0
+    || selectedActor.value !== ''
+    || selectedMember.value !== ''
+    || selectedGear.value !== ''
+    || searchText.value !== ''
+    || startDate.value !== ''
+    || endDate.value !== ''
+    || contextFilter.value !== null;
+});
+
 const allFilteredEvents = computed(() => {
   try {
-    return filterEvents({
+    const cf = contextFilter.value;
+    const filterParams = {
       entityTypes: selectedEntityTypes.value.length > 0 ? selectedEntityTypes.value : [],
+      actions: selectedActionTypes.value.length > 0 ? selectedActionTypes.value : [],
       actor: selectedActor.value,
-      searchText: searchText.value
-    });
+      searchText: searchText.value,
+      startDate: startDate.value,
+      endDate: endDate.value,
+      gearId: selectedGear.value || (cf && cf.gearId ? cf.gearId : ''),
+      memberName: selectedMember.value || (cf && cf.memberName ? cf.memberName : ''),
+      entityId: cf && cf.entityId ? cf.entityId : '',
+      entityName: cf && cf.entityName ? cf.entityName : '',
+      relatedEntityType: cf && cf.relatedEntityType ? cf.relatedEntityType : '',
+      relatedEntityId: cf && cf.relatedEntityId ? cf.relatedEntityId : ''
+    };
+    return filterEvents(filterParams);
   } catch (e) {
     console.warn('筛选事件失败:', e);
     return [];
   }
 });
+
+const filteredCount = computed(() => allFilteredEvents.value.length);
 
 const filteredEvents = computed(() => {
   return allFilteredEvents.value.slice(0, displayCount.value);
@@ -208,6 +331,26 @@ const hasMore = computed(() => {
   return allFilteredEvents.value.length > displayCount.value;
 });
 
+watch(() => props.initialFilter, (newFilter) => {
+  if (newFilter) {
+    applyInitialFilter(newFilter);
+  }
+}, { immediate: true, deep: true });
+
+function applyInitialFilter(filter) {
+  contextFilter.value = { ...filter };
+  if (filter.entityType && !filter.gearId && !filter.memberName && !selectedEntityTypes.value.includes(filter.entityType)) {
+    selectedEntityTypes.value = [filter.entityType];
+  }
+  if (filter.gearId && !selectedGear.value) {
+    selectedGear.value = filter.gearId;
+  }
+  if (filter.memberName && !selectedMember.value) {
+    selectedMember.value = filter.memberName;
+  }
+  displayCount.value = PAGE_SIZE;
+}
+
 function toggleEntityType(type) {
   const idx = selectedEntityTypes.value.indexOf(type);
   if (idx > -1) {
@@ -216,6 +359,39 @@ function toggleEntityType(type) {
     selectedEntityTypes.value.push(type);
   }
   displayCount.value = PAGE_SIZE;
+}
+
+function toggleActionType(type) {
+  const idx = selectedActionTypes.value.indexOf(type);
+  if (idx > -1) {
+    selectedActionTypes.value.splice(idx, 1);
+  } else {
+    selectedActionTypes.value.push(type);
+  }
+  displayCount.value = PAGE_SIZE;
+}
+
+function clearAllFilters() {
+  selectedEntityTypes.value = [];
+  selectedActionTypes.value = [];
+  selectedActor.value = '';
+  selectedMember.value = '';
+  selectedGear.value = '';
+  searchText.value = '';
+  startDate.value = '';
+  endDate.value = '';
+  contextFilter.value = null;
+  displayCount.value = PAGE_SIZE;
+  emit('clear-context');
+}
+
+function clearContext() {
+  contextFilter.value = null;
+  selectedEntityTypes.value = [];
+  selectedGear.value = '';
+  selectedMember.value = '';
+  displayCount.value = PAGE_SIZE;
+  emit('clear-context');
 }
 
 function loadMore() {
@@ -270,7 +446,7 @@ function formatTime(isoString) {
   return `${y}-${m}-${d} ${hh}:${mm}`;
 }
 
-watch([selectedEntityTypes, selectedActor, searchText], () => {
+watch([selectedEntityTypes, selectedActionTypes, selectedActor, selectedMember, selectedGear, searchText, startDate, endDate], () => {
   displayCount.value = PAGE_SIZE;
 });
 </script>
@@ -300,6 +476,12 @@ watch([selectedEntityTypes, selectedActor, searchText], () => {
   font-size: 18px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .stats-row {
   display: flex;
   gap: 12px;
@@ -313,13 +495,76 @@ watch([selectedEntityTypes, selectedActor, searchText], () => {
   border-radius: 6px;
 }
 
+.stat-item.filtered {
+  background: #e8f0e4;
+  color: #2f4a2c;
+  font-weight: 500;
+}
+
+.clear-filter-btn {
+  padding: 4px 12px;
+  border: 1px solid #d0d8c5;
+  border-radius: 6px;
+  background: #fff;
+  color: #666;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-filter-btn:hover {
+  background: #f5f7f2;
+  color: #2f4a2c;
+}
+
+.context-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #eef4e8, #f5f7f2);
+  border: 1px solid #d4e0c8;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #2f4a2c;
+  font-weight: 500;
+}
+
+.context-icon {
+  font-size: 14px;
+}
+
+.context-clear {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid #c0ccb4;
+  border-radius: 4px;
+  background: #fff;
+  color: #666;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.context-clear:hover {
+  background: #f0f4e8;
+  color: #333;
+}
+
 .filters {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
+  flex-direction: column;
+  gap: 12px;
   margin-bottom: 20px;
   padding-bottom: 16px;
   border-bottom: 1px solid #eee;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .filter-group {
@@ -339,6 +584,11 @@ watch([selectedEntityTypes, selectedActor, searchText], () => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.action-chips {
+  max-height: 60px;
+  overflow-y: auto;
 }
 
 .filter-chip {
@@ -361,8 +611,14 @@ watch([selectedEntityTypes, selectedActor, searchText], () => {
   color: #fff;
 }
 
+.action-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
 .filter-select,
-.filter-input {
+.filter-input,
+.filter-date {
   padding: 6px 10px;
   border: 1px solid #ddd;
   border-radius: 6px;
@@ -372,6 +628,10 @@ watch([selectedEntityTypes, selectedActor, searchText], () => {
 
 .filter-input {
   min-width: 180px;
+}
+
+.filter-date {
+  min-width: 140px;
 }
 
 .timeline-container {
@@ -584,13 +844,18 @@ watch([selectedEntityTypes, selectedActor, searchText], () => {
 }
 
 @media (max-width: 768px) {
-  .filters {
+  .filter-row {
     flex-direction: column;
-    align-items: stretch;
+    gap: 8px;
   }
 
   .filter-group {
     flex-wrap: wrap;
+  }
+
+  .filter-input,
+  .filter-date {
+    min-width: 140px;
   }
 
   .timeline-container {

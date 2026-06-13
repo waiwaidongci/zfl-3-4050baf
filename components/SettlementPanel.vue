@@ -69,6 +69,7 @@
               <span>公共费用 ¥{{ record.totalExtraExpenses }}</span>
             </div>
             <div class="settlement-actions" @click.stop>
+              <button class="ghost small" @click="emit('view-timeline', { entityType: 'settlement', entityId: record.id, entityName: record.name })">📋 时间线</button>
               <button class="ghost small danger" @click="handleDelete(record.id)">删除</button>
             </div>
           </article>
@@ -90,6 +91,7 @@
               <option v-for="s in ['草稿','已确认','已结算']" :key="s">{{ s }}</option>
             </select>
             <button class="ghost small" @click="handleRefreshDeposits">🔄 同步押金</button>
+            <button class="ghost small" @click="emit('view-timeline', { entityType: 'settlement', entityId: selectedId, entityName: currentSettlement?.name || '' })">📋 时间线</button>
           </div>
         </div>
 
@@ -279,7 +281,7 @@ const props = defineProps({
   currentUser: { type: String, default: '' }
 });
 
-const emit = defineEmits(['update:settlementRecords', 'log-event']);
+const emit = defineEmits(['update:settlementRecords', 'log-event', 'view-timeline']);
 
 const selectedId = ref(null);
 const showExpenseForm = ref(false);
