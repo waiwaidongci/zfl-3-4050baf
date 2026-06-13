@@ -183,7 +183,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:reservations', 'create-request']);
+const emit = defineEmits(['update:reservations', 'create-request', 'log-event']);
 
 const statusFilter = ref('全部状态');
 const gearFilter = ref('全部装备');
@@ -285,6 +285,9 @@ function handleAddReservation() {
     return;
   }
 
+  const beforeState = null;
+  const gear = props.gears.find((g) => g.id === form.value.gearId);
+
   const newRes = reservation.addReservation({
     gearId: form.value.gearId,
     borrower: form.value.borrower,
@@ -296,6 +299,18 @@ function handleAddReservation() {
 
   if (newRes) {
     updateReservations([newRes, ...props.reservations]);
+    emit('log-event', {
+      entityType: 'reservation',
+      entityId: newRes.id,
+      entityName: `${gear ? gear.name : '未知装备'} - ${newRes.borrower}`,
+      action: 'create',
+      beforeState,
+      afterState: newRes,
+      sourcePage: '预约排程',
+      relatedEntityType: 'gear',
+      relatedEntityId: newRes.gearId,
+      relatedEntityName: gear ? gear.name : ''
+    });
     form.value = {
       gearId: '',
       borrower: props.currentUser || '',
@@ -309,13 +324,31 @@ function handleAddReservation() {
 
 function handleCancel(reservationId) {
   if (!confirm('确定取消该候补预约吗？')) return;
+  const target = props.reservations.find((r) => r.id === reservationId);
+  const beforeState = target ? { ...target } : null;
+  const gear = props.gears.find((g) => g.id === target?.gearId);
   const updated = reservation.doCancel(reservationId);
   if (updated) {
     updateReservations(props.reservations.map((r) => (r.id === reservationId ? updated : r)));
+    emit('log-event', {
+      entityType: 'reservation',
+      entityId: reservationId,
+      entityName: `${gear ? gear.name : '未知装备'} - ${target?.borrower || ''}`,
+      action: 'cancel',
+      beforeState,
+      afterState: updated,
+      sourcePage: '预约排程',
+      relatedEntityType: 'gear',
+      relatedEntityId: target?.gearId || '',
+      relatedEntityName: gear ? gear.name : ''
+    });
   }
 }
 
 function handleManualActivate(reservationId) {
+  const target = props.reservations.find((r) => r.id === reservationId);
+  const beforeState = target ? { ...target } : null;
+  const gear = props.gears.find((g) => g.id === target?.gearId);
   const result = reservation.doActivate(reservationId);
   if (!result.ok) {
     const messages = result.errors.map((e) => e.message).join('\n');
@@ -326,6 +359,19 @@ function handleManualActivate(reservationId) {
   if (result.reservation && result.request) {
     updateReservations(props.reservations.map((r) => (r.id === reservationId ? result.reservation : r)));
     emit('create-request', result.request);
+    emit('log-event', {
+      entityType: 'reservation',
+      entityId: reservationId,
+      entityName: `${gear ? gear.name : '未知装备'} - ${target?.borrower || ''}`,
+      action: 'activate',
+      beforeState,
+      afterState: result.reservation,
+      sourcePage: '预约排程',
+      notes: '手动转正，已生成借用申请',
+      relatedEntityType: 'request',
+      relatedEntityId: result.request.id,
+      relatedEntityName: result.request.gearName
+    });
   }
 }
 

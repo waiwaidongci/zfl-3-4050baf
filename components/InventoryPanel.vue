@@ -91,7 +91,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:inventoryLists', 'process-abnormal-action']);
+const emit = defineEmits(['update:inventoryLists', 'process-abnormal-action', 'log-event']);
 
 const selectedId = ref(null);
 
@@ -153,6 +153,7 @@ function handleCreate() {
     alert('请输入盘点单名称');
     return;
   }
+  const beforeState = null;
   const newList = inventory.createList({
     name: createForm.value.name.trim(),
     type: createForm.value.type,
@@ -163,6 +164,18 @@ function handleCreate() {
   if (newList) {
     updateLists([newList, ...props.inventoryLists]);
     selectedId.value = newList.id;
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: newList.id,
+      entityName: newList.name,
+      action: 'create',
+      beforeState,
+      afterState: newList,
+      sourcePage: '装备盘点',
+      relatedEntityType: 'trip',
+      relatedEntityId: newList.tripId || '',
+      relatedEntityName: props.trips.find((t) => t.id === newList.tripId)?.destination || ''
+    });
     createForm.value = {
       name: '',
       type: '出行前',
@@ -174,40 +187,114 @@ function handleCreate() {
 }
 
 function handleToggleItem(itemId) {
+  const list = currentInventory.value;
+  const item = list?.items.find((i) => i.id === itemId);
+  const beforeState = item ? { ...item } : null;
   const updated = inventory.toggleItemStatus(selectedId.value, itemId);
   if (updated) {
+    const updatedItem = updated.items.find((i) => i.id === itemId);
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState: { item: beforeState },
+      afterState: { item: updatedItem },
+      sourcePage: '装备盘点',
+      notes: `切换盘点项状态：${item?.gearName || ''}`,
+      customChanges: { item: beforeState ? [{ field: 'status', before: beforeState.status, after: updatedItem?.status }] : [] }
+    });
   }
 }
 
 function handleUpdateItem(itemId, updates) {
+  const list = currentInventory.value;
+  const item = list?.items.find((i) => i.id === itemId);
+  const beforeState = item ? { ...item } : null;
   const updated = inventory.updateItem(selectedId.value, itemId, updates);
   if (updated) {
+    const updatedItem = updated.items.find((i) => i.id === itemId);
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState: { item: beforeState },
+      afterState: { item: updatedItem },
+      sourcePage: '装备盘点',
+      notes: `更新盘点项：${item?.gearName || ''}`
+    });
   }
 }
 
 function handleRemoveItem(itemId) {
+  const list = currentInventory.value;
+  const item = list?.items.find((i) => i.id === itemId);
+  const beforeState = list ? { items: [...list.items] } : null;
   const updated = inventory.removeItemFromList(selectedId.value, itemId);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState,
+      afterState: { items: updated.items },
+      sourcePage: '装备盘点',
+      notes: `移除盘点项：${item?.gearName || ''}`
+    });
   }
 }
 
 function handleAddGear(gearId) {
+  const list = currentInventory.value;
+  const beforeState = list ? { items: [...list.items] } : null;
+  const gear = props.gears.find((g) => g.id === gearId);
   const updated = inventory.addGearToList(selectedId.value, gearId);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState,
+      afterState: { items: updated.items },
+      sourcePage: '装备盘点',
+      notes: `添加装备到盘点：${gear?.name || ''}`,
+      relatedEntityType: 'gear',
+      relatedEntityId: gearId,
+      relatedEntityName: gear?.name || ''
+    });
   } else {
     alert('该装备已在盘点单中');
   }
 }
 
 function handleAddGearsFromTrip(tripId) {
+  const list = currentInventory.value;
+  const beforeState = list ? { items: [...list.items] } : null;
+  const trip = props.trips.find((t) => t.id === tripId);
   const updated = inventory.addGearsFromTrip(selectedId.value, tripId);
   if (updated) {
     const addedCount = updated.items.length - (currentInventory.value?.items?.length || 0);
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState,
+      afterState: { items: updated.items },
+      sourcePage: '装备盘点',
+      notes: `从出行清单添加装备：${trip?.destination || ''}，新增 ${addedCount} 件`,
+      relatedEntityType: 'trip',
+      relatedEntityId: tripId,
+      relatedEntityName: trip?.destination || ''
+    });
     if (addedCount > 0) {
       alert(`已从出行清单添加 ${addedCount} 件装备`);
     } else {
@@ -217,30 +304,82 @@ function handleAddGearsFromTrip(tripId) {
 }
 
 function handleComplete() {
+  const list = currentInventory.value;
+  const beforeState = list ? { ...list } : null;
   const updated = inventory.completeList(selectedId.value);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'complete',
+      beforeState,
+      afterState: updated,
+      sourcePage: '装备盘点'
+    });
   }
 }
 
 function handleReopen() {
+  const list = currentInventory.value;
+  const beforeState = list ? { ...list } : null;
   const updated = inventory.reopenList(selectedId.value);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState,
+      afterState: updated,
+      sourcePage: '装备盘点',
+      notes: '重新打开盘点单'
+    });
   }
 }
 
 function handleUpdateNotes(notes) {
+  const list = currentInventory.value;
+  const beforeState = list ? { notes: list.notes } : null;
   const updated = inventory.updateListInfo(selectedId.value, { notes });
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState,
+      afterState: { notes: updated.notes },
+      sourcePage: '装备盘点',
+      notes: '更新盘点单备注'
+    });
   }
 }
 
 function handleAddAction(itemId, actionData) {
+  const list = currentInventory.value;
+  const item = list?.items.find((i) => i.id === itemId);
+  const beforeState = item ? { abnormalActions: [...(item.abnormalActions || [])] } : null;
   const updated = inventory.addAbnormalAction(selectedId.value, itemId, actionData);
   if (updated) {
+    const updatedItem = updated.items.find((i) => i.id === itemId);
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState: { abnormalActions: beforeState?.abnormalActions || [] },
+      afterState: { abnormalActions: updatedItem?.abnormalActions || [] },
+      sourcePage: '装备盘点',
+      notes: `添加异常处理：${item?.gearName || ''} - ${actionData.type || ''}`,
+      relatedEntityType: 'gear',
+      relatedEntityId: item?.gearId || '',
+      relatedEntityName: item?.gearName || ''
+    });
   }
 }
 
@@ -253,14 +392,29 @@ function handleUpdateAction(itemId, actionId, updates) {
 
   const prevStatus = action.status;
   const newStatus = updates.status;
+  const beforeState = { ...action };
 
   const updated = inventory.updateAbnormalAction(selectedId.value, itemId, actionId, updates);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    const updatedItem = updated.items.find((i) => i.id === itemId);
+    const updatedAction = updatedItem?.abnormalActions?.find((a) => a.id === actionId);
+
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list.name || '盘点单',
+      action: 'update',
+      beforeState,
+      afterState: updatedAction,
+      sourcePage: '装备盘点',
+      notes: `更新异常处理：${item?.gearName || ''}`,
+      relatedEntityType: 'gear',
+      relatedEntityId: item?.gearId || '',
+      relatedEntityName: item?.gearName || ''
+    });
 
     if (prevStatus !== '已处理' && newStatus === '已处理') {
-      const updatedItem = updated.items.find((i) => i.id === itemId);
-      const updatedAction = updatedItem?.abnormalActions?.find((a) => a.id === actionId);
       emit('process-abnormal-action', {
         action: updatedAction,
         item: { id: updatedItem.id, gearId: updatedItem.gearId, gearName: updatedItem.gearName, owner: updatedItem.owner },
@@ -272,9 +426,26 @@ function handleUpdateAction(itemId, actionId, updates) {
 }
 
 function handleRemoveAction(itemId, actionId) {
+  const list = currentInventory.value;
+  const item = list?.items.find((i) => i.id === itemId);
+  const action = item?.abnormalActions?.find((a) => a.id === actionId);
+  const beforeState = action ? { ...action } : null;
   const updated = inventory.removeAbnormalAction(selectedId.value, itemId, actionId);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+    emit('log-event', {
+      entityType: 'inventory',
+      entityId: selectedId.value,
+      entityName: list?.name || '盘点单',
+      action: 'update',
+      beforeState,
+      afterState: null,
+      sourcePage: '装备盘点',
+      notes: `移除异常处理：${item?.gearName || ''} - ${action?.type || ''}`,
+      relatedEntityType: 'gear',
+      relatedEntityId: item?.gearId || '',
+      relatedEntityName: item?.gearName || ''
+    });
   }
 }
 </script>

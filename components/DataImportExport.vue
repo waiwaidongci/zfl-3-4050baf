@@ -81,7 +81,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['imported']);
+const emit = defineEmits(['imported', 'log-event']);
 
 const fileInput = ref(null);
 const isDragging = ref(false);
@@ -116,6 +116,25 @@ function handleExport() {
   const spaceName = props.spaceInfo?.name || 'space';
   const dateStr = new Date().toISOString().slice(0, 10);
   const filename = `露营装备数据-${spaceName}-${dateStr}.json`;
+  
+  const exportSummary = selectedExportEntities.value
+    .map((key) => `${ENTITY_LABELS[key]}(${getEntityCount(key)})`)
+    .join(', ');
+  
+  emit('log-event', {
+    entityType: 'space',
+    entityId: props.spaceInfo?.id || '',
+    entityName: props.spaceInfo?.name || '空间',
+    action: 'export',
+    beforeState: null,
+    afterState: {
+      exportedEntities: [...selectedExportEntities.value],
+      summary: exportSummary
+    },
+    sourcePage: '数据导入导出',
+    notes: `导出数据：${exportSummary}`
+  });
+  
   downloadJSON(data, filename);
 }
 

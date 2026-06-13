@@ -473,7 +473,8 @@ export function validateAndNormalizeImportData(rawData) {
     depositRecords: rawData.depositRecords !== undefined || rawData.deposits !== undefined,
     inventoryLists: rawData.inventoryLists !== undefined,
     settlementRecords: rawData.settlementRecords !== undefined,
-    reservations: rawData.reservations !== undefined
+    reservations: rawData.reservations !== undefined,
+    eventLogs: rawData.eventLogs !== undefined
   };
 
   const source = {
@@ -486,7 +487,8 @@ export function validateAndNormalizeImportData(rawData) {
     depositRecords: rawData.depositRecords || rawData.deposits || [],
     inventoryLists: rawData.inventoryLists || [],
     settlementRecords: rawData.settlementRecords || [],
-    reservations: rawData.reservations || []
+    reservations: rawData.reservations || [],
+    eventLogs: rawData.eventLogs || []
   };
 
   if (isLegacyFormat) {
@@ -583,6 +585,13 @@ export function validateAndNormalizeImportData(rawData) {
     summary.reservations = reservationResult.data.length;
   }
 
+  if (entityPresence.eventLogs) {
+    const eventLogResult = normalizeEventLogs(source.eventLogs);
+    allWarnings.push(...eventLogResult.warnings);
+    normalizedData.eventLogs = eventLogResult.data.map((e) => ({ ...e, isImported: true }));
+    summary.eventLogs = eventLogResult.data.length;
+  }
+
   summary.totalWarnings = allWarnings.length;
 
   return {
@@ -592,6 +601,43 @@ export function validateAndNormalizeImportData(rawData) {
     data: normalizedData,
     summary
   };
+}
+
+export function normalizeEventLogs(rawLogs) {
+  const warnings = [];
+  if (!Array.isArray(rawLogs)) {
+    warnings.push('事件日志数据不是数组，已重置为空');
+    return { data: [], warnings };
+  }
+  const data = rawLogs.filter((log, index) => {
+    if (!log || typeof log !== 'object') {
+      warnings.push(`事件日志第 ${index + 1} 条数据格式异常，已跳过`);
+      return false;
+    }
+    if (!log.entityType || !log.action) {
+      warnings.push(`事件日志第 ${index + 1} 条缺少必要字段，已跳过`);
+      return false;
+    }
+    return true;
+  }).map((log) => ({
+    id: log.id || crypto.randomUUID(),
+    timestamp: log.timestamp || new Date().toISOString(),
+    entityType: log.entityType,
+    entityId: log.entityId || '',
+    entityName: log.entityName || '',
+    action: log.action,
+    actor: log.actor || '',
+    beforeState: log.beforeState || '',
+    afterState: log.afterState || '',
+    changes: Array.isArray(log.changes) ? log.changes : [],
+    sourcePage: log.sourcePage || '',
+    notes: log.notes || '',
+    relatedEntityType: log.relatedEntityType || '',
+    relatedEntityId: log.relatedEntityId || '',
+    relatedEntityName: log.relatedEntityName || '',
+    isImported: log.isImported || false
+  }));
+  return { data, warnings };
 }
 
 export const ENTITY_LABELS = {
@@ -604,7 +650,8 @@ export const ENTITY_LABELS = {
   depositRecords: '押金',
   inventoryLists: '盘点单',
   settlementRecords: '费用结算',
-  reservations: '候补预约'
+  reservations: '候补预约',
+  eventLogs: '操作日志'
 };
 
 export const DATA_ENTITIES = Object.keys(ENTITY_LABELS);
@@ -690,6 +737,19 @@ export function matchReservation(existingReservations, imported) {
   );
 }
 
+export function matchEventLog(existingLogs, imported) {
+  if (imported.id) {
+    return existingLogs.find((l) => l.id === imported.id);
+  }
+  return existingLogs.find((l) =>
+    l.timestamp === imported.timestamp &&
+    l.entityType === imported.entityType &&
+    l.entityId === imported.entityId &&
+    l.action === imported.action &&
+    l.actor === imported.actor
+  );
+}
+
 const MATCHERS = {
   members: matchMember,
   gears: matchGear,
@@ -700,7 +760,8 @@ const MATCHERS = {
   depositRecords: matchDepositRecord,
   inventoryLists: matchInventoryList,
   settlementRecords: matchSettlementRecord,
-  reservations: matchReservation
+  reservations: matchReservation,
+  eventLogs: matchEventLog
 };
 
 function updateItemWithImported(existing, imported, preserveId = true) {
@@ -855,7 +916,8 @@ const MERGE_PROCESS_ORDER = [
   'handoverRecords',
   'depositRecords',
   'inventoryLists',
-  'settlementRecords'
+  'settlementRecords',
+  'eventLogs'
 ];
 
 export function analyzeMergeData(currentData, importedData) {
@@ -873,7 +935,8 @@ export function analyzeMergeData(currentData, importedData) {
     depositRecords: Object.create(null),
     inventoryLists: Object.create(null),
     settlementRecords: Object.create(null),
-    reservations: Object.create(null)
+    reservations: Object.create(null),
+    eventLogs: Object.create(null)
   };
 
   MERGE_PROCESS_ORDER.forEach((entityKey) => {

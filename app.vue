@@ -5,11 +5,13 @@ import EquipmentHealthProfile from './components/EquipmentHealthProfile.vue';
 import InventoryPanel from './components/InventoryPanel.vue';
 import SettlementPanel from './components/SettlementPanel.vue';
 import ReservationPanel from './components/ReservationPanel.vue';
+import EventTimeline from './components/EventTimeline.vue';
 import { propagateMemberRename, cleanupDeletedTrip } from './utils/settlementTransform.js';
 import { normalizeGears } from './utils/dataTransform.js';
 import { useReservation } from './composables/useReservation.js';
 import { computeQueuePositions, expireOutdatedReservations, recalcAllPriorities } from './utils/reservationTransform.js';
 import { buildAllHealthInfoMap } from './composables/useEquipmentHealth.js';
+import { recordEvent } from './composables/useEventLog.js';
 import {
   safeParseJSON,
   SPACE_LIST_KEY,
@@ -410,6 +412,14 @@ function deleteSpace(spaceId) {
     alert('至少需要保留一个空间');
     return;
   }
+  logEvent({
+    entityType: 'space',
+    entityId: spaceId,
+    entityName: space.name,
+    action: 'delete',
+    beforeState: space,
+    notes: `删除空间「${space.name}」（${space.description || '无描述'}）`
+  });
   deleteSpaceById(spaceId);
 }
 
@@ -428,6 +438,14 @@ function resetSpaceData(spaceId) {
   const space = spaces.value.find((s) => s.id === spaceId);
   if (!space) return;
   if (!confirm(`确定重置空间「${space.name}」的所有数据吗？此操作将清空该空间的成员、装备、申请等所有记录，不可恢复。`)) return;
+  logEvent({
+    entityType: 'space',
+    entityId: spaceId,
+    entityName: space.name,
+    action: 'reset',
+    beforeState: { ...space },
+    notes: `重置空间「${space.name}」所有数据`
+  });
   resetSpace(spaceId);
   if (currentSpaceId.value === spaceId) {
     const data = getCurrentSpaceData();
@@ -448,8 +466,20 @@ function handleDataImported(payload) {
     return;
   }
 
+  const beforeSpace = spaces.value.find((s) => s.id === currentSpaceId.value);
   const result = importSpaceData(currentSpaceId.value, data, mode, mergeAnalysis);
   if (result && result.success) {
+    const notes = mode === 'merge'
+      ? `合并导入成功：${result.stats ? Object.entries(result.stats).map(([k,v]) => `${k}${v.added || 0}新增/${v.merged || 0}合并`).join('、') : '数据合并完成'}`
+      : `覆盖导入成功，已替换空间所有数据`;
+    logEvent({
+      entityType: 'space',
+      entityId: currentSpaceId.value,
+      entityName: beforeSpace?.name || '当前空间',
+      action: 'import',
+      beforeState: beforeSpace ? { ...beforeSpace } : null,
+      notes
+    });
     if (result.stats) {
       console.log('合并导入成功', result.stats);
     } else {
@@ -489,7 +519,22 @@ function saveSpaceModal() {
     const newSpace = createSpace(spaceForm.value.name, spaceForm.value.description);
     switchSpace(newSpace.id);
   } else if (spaceModalMode.value === 'edit' && editingSpaceId.value) {
+    const oldSpace = spaces.value.find((s) => s.id === editingSpaceId.value);
+    const beforeState = oldSpace ? { ...oldSpace } : null;
     updateSpace(editingSpaceId.value, spaceForm.value.name, spaceForm.value.description);
+    if (beforeState && (beforeState.name !== spaceForm.value.name || (beforeState.description || '') !== (spaceForm.value.description || ''))) {
+      logEvent({
+        entityType: 'space',
+        entityId: editingSpaceId.value,
+        entityName: beforeState.name,
+        action: 'rename',
+        beforeState,
+        afterState: { ...beforeState, name: spaceForm.value.name, description: spaceForm.value.description },
+        notes: beforeState.name !== spaceForm.value.name
+          ? `空间「${beforeState.name}」改名为「${spaceForm.value.name}」`
+          : `更新空间描述「${spaceForm.value.name}」`
+      });
+    }
   }
   closeSpaceModal();
 }
@@ -582,6 +627,40 @@ const reservations = computed({
   }
 });
 
+const eventLogs = computed({
+  get: () => getCurrentSpaceData()?.eventLogs || [],
+  set: (val) => {
+    const data = getCurrentSpaceData();
+    if (data) data.eventLogs = val;
+  }
+});
+
+const eventLogRef = computed({
+  get: () => eventLogs.value,
+  set: (val) => { eventLogs.value = val; }
+});
+
+function logEvent(params) {
+  if (!currentSpaceId.value) return null;
+  const data = getCurrentSpaceData();
+  if (!data) return null;
+
+  const logsArr = data.eventLogs || [];
+  const wrappedRef = { value: logsArr };
+
+  const event = recordEvent(wrappedRef, {
+    ...params,
+    actor: currentUser.value,
+    sourcePage: params.sourcePage || tab.value || ''
+  });
+
+  if (event) {
+    data.eventLogs = wrappedRef.value;
+  }
+
+  return event;
+}
+
 const currentUser = ref('阿岚');
 
 const healthInfoMap = computed(() =>
@@ -606,6 +685,7 @@ const reservationHelper = useReservation({
 });
 
 function triggerReservationCheck() {
+  const beforeReservations = JSON.parse(JSON.stringify(reservations.value));
   const result = reservationHelper.checkAndActivate();
   if (result.list) {
     reservations.value = result.list;
@@ -614,7 +694,26 @@ function triggerReservationCheck() {
     for (const req of result.newRequests) {
       requests.value = [req, ...requests.value];
     }
-    if (result.activated.length > 0) {
+    if (result.activated && result.activated.length > 0) {
+      for (const activatedId of result.activated) {
+        const beforeRes = beforeReservations.find((r) => r.id === activatedId);
+        const afterRes = reservations.value.find((r) => r.id === activatedId);
+        const relatedRequest = result.newRequests.find((req) => req.fromReservationId === activatedId);
+        const gear = gears.value.find((g) => g.id === afterRes?.gearId || beforeRes?.gearId);
+        logEvent({
+          entityType: 'reservation',
+          entityId: activatedId,
+          entityName: `${gear?.name || beforeRes?.gearName || '未知装备'} - ${afterRes?.borrower || beforeRes?.borrower || ''}`,
+          action: 'activate',
+          beforeState: beforeRes,
+          afterState: afterRes,
+          sourcePage: tab.value || '',
+          notes: '系统自动检测转正，已生成借用申请',
+          relatedEntityType: 'request',
+          relatedEntityId: relatedRequest?.id || '',
+          relatedEntityName: relatedRequest?.gearName || ''
+        });
+      }
       const firstRes = reservations.value.find((r) => r.id === result.activated[0]);
       if (firstRes) {
         alert(`候补预约「${firstRes.gearName}」已自动转正，已生成借用申请`);
@@ -657,6 +756,7 @@ const tab = ref('装备库');
 const category = ref('全部分类');
 const requestFilter = ref('全部申请');
 const form = ref({ name: '', category: '帐篷天幕', owner: '阿岚', available: iso(2), deposit: '100', status: '可借', notes: '', maintenanceCycleDays: 30, nextMaintenanceDate: iso(30), maintenanceReminderLevel: '标准' });
+const editingGearId = ref(null);
 const requestForm = ref({ gearId: '', borrower: '梁序', start: iso(2), end: iso(4), reason: '' });
 
 const memberForm = ref({ nickname: '', phone: '', area: '', notes: '' });
@@ -781,6 +881,7 @@ watch(depositRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId
 watch(inventoryLists, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(settlementRecords, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 watch(reservations, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
+watch(eventLogs, () => currentSpaceId.value && saveSpaceData(currentSpaceId.value), { deep: true });
 
 function createDepositRecord(requestId) {
   const req = requests.value.find((r) => r.id === requestId);
@@ -887,11 +988,74 @@ function saveDepositRecord() {
     return;
   }
 
+  const oldDeposit = depositRecords.value.find((d) => d.id === currentDepositId.value);
+  const beforeState = oldDeposit ? { ...oldDeposit } : null;
+  const newDeposit = { ...depositForm.value, id: oldDeposit.id, createdAt: oldDeposit.createdAt, updatedAt: new Date().toISOString().slice(0, 10) };
+
   depositRecords.value = depositRecords.value.map((d) =>
-    d.id === currentDepositId.value
-      ? { ...depositForm.value, id: d.id, createdAt: d.createdAt, updatedAt: new Date().toISOString().slice(0, 10) }
-      : d
+    d.id === currentDepositId.value ? newDeposit : d
   );
+
+  if (oldDeposit) {
+    const deductDiff = Number(newDeposit.deductedAmount) - Number(beforeState.deductedAmount);
+    const refundDiff = Number(newDeposit.refundedAmount) - Number(beforeState.refundedAmount);
+    const receivedDiff = Number(newDeposit.receivedAmount) - Number(beforeState.receivedAmount);
+    const actionNotes = [];
+    let loggedSpecial = false;
+
+    if (deductDiff > 0) {
+      actionNotes.push(`扣除押金 ¥${deductDiff}`);
+      logEvent({
+        entityType: 'deposit',
+        entityId: oldDeposit.id,
+        entityName: oldDeposit.gearName,
+        action: 'deduct',
+        beforeState,
+        afterState: newDeposit,
+        relatedEntityType: 'gear',
+        relatedEntityId: oldDeposit.gearId,
+        relatedEntityName: oldDeposit.gearName,
+        notes: `押金手动扣除 ¥${deductDiff}（${newDeposit.deductReason || '无原因'}）`
+      });
+      loggedSpecial = true;
+    }
+    if (refundDiff > 0) {
+      actionNotes.push(`退还押金 ¥${refundDiff}`);
+      logEvent({
+        entityType: 'deposit',
+        entityId: oldDeposit.id,
+        entityName: oldDeposit.gearName,
+        action: 'refund',
+        beforeState,
+        afterState: newDeposit,
+        relatedEntityType: 'gear',
+        relatedEntityId: oldDeposit.gearId,
+        relatedEntityName: oldDeposit.gearName,
+        notes: `押金手动退还 ¥${refundDiff}`
+      });
+      loggedSpecial = true;
+    }
+    if (receivedDiff > 0) {
+      actionNotes.push(`收取押金 ¥${receivedDiff}`);
+    }
+
+    if (!loggedSpecial && (deductDiff !== 0 || refundDiff !== 0 || receivedDiff !== 0 ||
+        beforeState.status !== newDeposit.status || beforeState.notes !== newDeposit.notes)) {
+      logEvent({
+        entityType: 'deposit',
+        entityId: oldDeposit.id,
+        entityName: oldDeposit.gearName,
+        action: 'update',
+        beforeState,
+        afterState: newDeposit,
+        relatedEntityType: 'gear',
+        relatedEntityId: oldDeposit.gearId,
+        relatedEntityName: oldDeposit.gearName,
+        notes: actionNotes.length > 0 ? `押金记录调整：${actionNotes.join('、')}` : '更新押金记录'
+      });
+    }
+  }
+
   updateDepositStatus(currentDepositId.value);
   closeDepositModal();
 }
@@ -1014,14 +1178,42 @@ function saveHandover() {
     }
   }
 
+  const handoverType = handoverForm.value.type;
+  const beforeState = currentHandoverId.value
+    ? { ...handoverRecords.value.find((h) => h.id === currentHandoverId.value) }
+    : null;
+
   if (currentHandoverId.value) {
     handoverRecords.value = handoverRecords.value.map((h) =>
       h.id === currentHandoverId.value ? { ...handoverForm.value } : h
     );
+    logEvent({
+      entityType: 'handover',
+      entityId: currentHandoverId.value,
+      entityName: handoverForm.value.gearName,
+      action: 'update',
+      beforeState,
+      afterState: handoverForm.value,
+      relatedEntityType: 'gear',
+      relatedEntityId: handoverForm.value.gearId,
+      relatedEntityName: handoverForm.value.gearName,
+      notes: `更新${handoverType}交接单（借用人：${handoverForm.value.borrower}）`
+    });
   } else {
     const newRecord = { ...handoverForm.value, id: crypto.randomUUID(), createdAt: new Date().toISOString().slice(0, 10) };
     handoverRecords.value = [newRecord, ...handoverRecords.value];
     currentHandoverId.value = newRecord.id;
+    logEvent({
+      entityType: 'handover',
+      entityId: newRecord.id,
+      entityName: newRecord.gearName,
+      action: handoverType === '借出' ? 'borrow' : 'return',
+      afterState: newRecord,
+      relatedEntityType: 'gear',
+      relatedEntityId: newRecord.gearId,
+      relatedEntityName: newRecord.gearName,
+      notes: `创建${handoverType}交接单（借用人：${newRecord.borrower}）`
+    });
   }
 
   if (handoverForm.value.type === '归还' && handoverForm.value.requestId) {
@@ -1033,6 +1225,10 @@ function saveHandover() {
       const receivedAmt = Number(deposit.receivedAmount) || 0;
       const dedNum = Number(dedAmt) || 0;
       const refundAmt = receivedAmt - dedNum >= 0 ? String(receivedAmt - dedNum) : deposit.refundedAmount;
+
+      const beforeDeposit = { ...deposit };
+      const deductChanged = beforeDeposit.deductedAmount !== dedAmt || beforeDeposit.refundedAmount !== refundAmt;
+
       depositRecords.value = depositRecords.value.map((d) =>
         d.id === deposit.id
           ? {
@@ -1044,6 +1240,23 @@ function saveHandover() {
             }
           : d
       );
+
+      if (deductChanged && Number(dedAmt) > Number(beforeDeposit.deductedAmount)) {
+        const updatedDeposit = depositRecords.value.find((d) => d.id === deposit.id);
+        logEvent({
+          entityType: 'deposit',
+          entityId: deposit.id,
+          entityName: deposit.gearName,
+          action: 'deduct',
+          beforeState: beforeDeposit,
+          afterState: updatedDeposit,
+          relatedEntityType: 'handover',
+          relatedEntityId: currentHandoverId.value,
+          relatedEntityName: handoverForm.value.gearName,
+          notes: `归还交接中扣除押金 ¥${Number(dedAmt) - Number(beforeDeposit.deductedAmount)}（${handoverForm.value.deductReason || '无原因'}）`
+        });
+      }
+
       updateDepositStatus(deposit.id);
     }
   }
@@ -1058,6 +1271,24 @@ function checkHandoverCompletion(requestId) {
   if (borrowHandover && borrowHandover.ownerConfirmed && borrowHandover.borrowerConfirmed) {
     const req = requests.value.find((r) => r.id === requestId);
     if (req && req.status === '已同意') {
+      const oldBorrow = handoverRecords.value.find((h) => h.id === borrowHandover.id);
+      if (!oldBorrow?._completionLogged) {
+        logEvent({
+          entityType: 'handover',
+          entityId: borrowHandover.id,
+          entityName: borrowHandover.gearName,
+          action: 'confirm',
+          beforeState: borrowHandover,
+          afterState: { ...borrowHandover, ownerConfirmed: true, borrowerConfirmed: true },
+          relatedEntityType: 'request',
+          relatedEntityId: requestId,
+          relatedEntityName: borrowHandover.gearName,
+          notes: `借出交接已由主人「${borrowHandover.owner}」和借用人「${borrowHandover.borrower}」双方确认`
+        });
+        handoverRecords.value = handoverRecords.value.map((h) =>
+          h.id === borrowHandover.id ? { ...h, _completionLogged: true } : h
+        );
+      }
       gears.value = gears.value.map((gear) => gear.id === req.gearId ? { ...gear, status: '借出中' } : gear);
     }
     const deposit = getDepositByRequest(requestId);
@@ -1073,6 +1304,8 @@ function checkHandoverCompletion(requestId) {
         alert('已收金额必须等于押金金额');
         return;
       }
+      const beforeDeposit = { ...deposit };
+      const receivedChanged = beforeDeposit.receivedAmount !== receivedAmt;
       depositRecords.value = depositRecords.value.map((d) =>
         d.id === deposit.id
           ? {
@@ -1083,6 +1316,21 @@ function checkHandoverCompletion(requestId) {
             }
           : d
       );
+      if (receivedChanged && Number(receivedAmt) > 0) {
+        const updatedDeposit = depositRecords.value.find((d) => d.id === deposit.id);
+        logEvent({
+          entityType: 'deposit',
+          entityId: deposit.id,
+          entityName: deposit.gearName,
+          action: 'confirm',
+          beforeState: beforeDeposit,
+          afterState: updatedDeposit,
+          relatedEntityType: 'handover',
+          relatedEntityId: borrowHandover.id,
+          relatedEntityName: borrowHandover.gearName,
+          notes: `借出交接确认，已收取押金 ¥${receivedAmt}（借用人：${borrowHandover.borrower}）`
+        });
+      }
       updateDepositStatus(deposit.id);
     }
   }
@@ -1090,6 +1338,24 @@ function checkHandoverCompletion(requestId) {
   if (returnHandover && returnHandover.ownerConfirmed && returnHandover.borrowerConfirmed) {
     const req = requests.value.find((r) => r.id === requestId);
     if (req) {
+      const oldReturn = handoverRecords.value.find((h) => h.id === returnHandover.id);
+      if (!oldReturn?._completionLogged) {
+        logEvent({
+          entityType: 'handover',
+          entityId: returnHandover.id,
+          entityName: returnHandover.gearName,
+          action: 'confirm',
+          beforeState: returnHandover,
+          afterState: { ...returnHandover, ownerConfirmed: true, borrowerConfirmed: true },
+          relatedEntityType: 'request',
+          relatedEntityId: requestId,
+          relatedEntityName: returnHandover.gearName,
+          notes: `归还交接已由主人「${returnHandover.owner}」和借用人「${returnHandover.borrower}」双方确认`
+        });
+        handoverRecords.value = handoverRecords.value.map((h) =>
+          h.id === returnHandover.id ? { ...h, _completionLogged: true } : h
+        );
+      }
       requests.value = requests.value.map((item) =>
         item.id === requestId
           ? { ...item, status: '已归还', damage: returnHandover.damageRecord || '无' }
@@ -1353,19 +1619,31 @@ function saveTrip() {
     alert('请至少选择一位参与成员');
     return;
   }
+  const newData = {
+    destination: tripForm.value.destination.trim(),
+    startDate: tripForm.value.startDate,
+    members: [...tripForm.value.members],
+    gears: [...tripGears.value],
+    notes: tripForm.value.notes
+  };
+
   if (editingTripId.value) {
+    const oldTrip = trips.value.find((t) => t.id === editingTripId.value);
+    const beforeState = oldTrip ? { ...oldTrip } : null;
     trips.value = trips.value.map((t) =>
-      t.id === editingTripId.value
-        ? {
-            ...t,
-            destination: tripForm.value.destination.trim(),
-            startDate: tripForm.value.startDate,
-            members: [...tripForm.value.members],
-            gears: [...tripGears.value],
-            notes: tripForm.value.notes
-          }
-        : t
+      t.id === editingTripId.value ? { ...t, ...newData } : t
     );
+    if (beforeState) {
+      logEvent({
+        entityType: 'trip',
+        entityId: editingTripId.value,
+        entityName: beforeState.destination,
+        action: 'update',
+        beforeState,
+        afterState: { ...oldTrip, ...newData },
+        notes: `更新出行计划「${newData.destination}」`
+      });
+    }
     if (selectedTripId.value === editingTripId.value) {
       selectedTripId.value = editingTripId.value;
     }
@@ -1373,14 +1651,18 @@ function saveTrip() {
   } else {
     const newTrip = {
       id: crypto.randomUUID(),
-      destination: tripForm.value.destination.trim(),
-      startDate: tripForm.value.startDate,
-      members: [...tripForm.value.members],
-      gears: [...tripGears.value],
-      notes: tripForm.value.notes
+      ...newData
     };
     trips.value = [newTrip, ...trips.value];
     selectedTripId.value = newTrip.id;
+    logEvent({
+      entityType: 'trip',
+      entityId: newTrip.id,
+      entityName: newTrip.destination,
+      action: 'create',
+      afterState: newTrip,
+      notes: `创建出行计划「${newTrip.destination}」（${newTrip.members.length}人参加）`
+    });
   }
   resetTripForm();
 }
@@ -1408,6 +1690,14 @@ function cancelEditTrip() {
 
 function deleteTrip(trip) {
   if (!confirm(`确定删除出行计划「${trip.destination}」吗？`)) return;
+  logEvent({
+    entityType: 'trip',
+    entityId: trip.id,
+    entityName: trip.destination,
+    action: 'delete',
+    beforeState: trip,
+    notes: `删除出行计划「${trip.destination}」（${trip.members.length}人）`
+  });
   trips.value = trips.value.filter((t) => t.id !== trip.id);
   settlementRecords.value = cleanupDeletedTrip(settlementRecords.value, trip.id);
   if (selectedTripId.value === trip.id) {
@@ -1421,6 +1711,8 @@ function selectTrip(tripId) {
 
 function updateTripGearStatus(gearId, status) {
   if (!selectedTrip.value) return;
+  const oldGear = selectedTrip.value.gears.find((g) => g.gearId === gearId);
+  const beforeState = oldGear ? { ...oldGear } : null;
   trips.value = trips.value.map((t) =>
     t.id === selectedTrip.value.id
       ? {
@@ -1429,11 +1721,27 @@ function updateTripGearStatus(gearId, status) {
         }
       : t
   );
+  if (beforeState && beforeState.status !== status) {
+    const gear = gears.value.find((g) => g.id === gearId);
+    logEvent({
+      entityType: 'trip',
+      entityId: selectedTrip.value.id,
+      entityName: selectedTrip.value.destination,
+      action: 'update',
+      beforeState: { gear: beforeState },
+      afterState: { gear: { ...beforeState, status } },
+      relatedEntityType: 'gear',
+      relatedEntityId: gearId,
+      relatedEntityName: gear?.name || beforeState.name,
+      notes: `更新出行计划装备状态：${gear?.name || beforeState.name} 从「${beforeState.status}」改为「${status}」`
+    });
+  }
 }
 
 function removeTripGear(gearId) {
   if (!selectedTrip.value) return;
   if (!confirm('确定从清单中移除该装备吗？')) return;
+  const oldGear = selectedTrip.value.gears.find((g) => g.gearId === gearId);
   trips.value = trips.value.map((t) =>
     t.id === selectedTrip.value.id
       ? {
@@ -1442,12 +1750,148 @@ function removeTripGear(gearId) {
         }
       : t
   );
+  if (oldGear) {
+    const gear = gears.value.find((g) => g.id === gearId);
+    logEvent({
+      entityType: 'trip',
+      entityId: selectedTrip.value.id,
+      entityName: selectedTrip.value.destination,
+      action: 'update',
+      beforeState: { removedGear: oldGear },
+      relatedEntityType: 'gear',
+      relatedEntityId: gearId,
+      relatedEntityName: gear?.name || oldGear.name,
+      notes: `从出行计划中移除装备：${gear?.name || oldGear.name}`
+    });
+  }
 }
 
 function addGear() {
   if (!form.value.name.trim()) return;
-  gears.value = [{ id: crypto.randomUUID(), ...form.value, damage: '' }, ...gears.value];
+  
+  if (editingGearId.value) {
+    const oldGear = gears.value.find((g) => g.id === editingGearId.value);
+    if (!oldGear) return;
+    const beforeState = { ...oldGear };
+    const newGear = {
+      ...oldGear,
+      name: form.value.name.trim(),
+      category: form.value.category,
+      owner: form.value.owner,
+      available: form.value.available,
+      deposit: form.value.deposit,
+      status: form.value.status,
+      notes: form.value.notes,
+      maintenanceCycleDays: form.value.maintenanceCycleDays,
+      nextMaintenanceDate: form.value.nextMaintenanceDate,
+      maintenanceReminderLevel: form.value.maintenanceReminderLevel
+    };
+    gears.value = gears.value.map((g) => (g.id === editingGearId.value ? newGear : g));
+    
+    const isRename = beforeState.name !== newGear.name;
+    logEvent({
+      entityType: 'gear',
+      entityId: editingGearId.value,
+      entityName: newGear.name,
+      action: isRename ? 'rename' : 'update',
+      beforeState,
+      afterState: newGear,
+      notes: isRename
+        ? `装备「${beforeState.name}」改名为「${newGear.name}」`
+        : `更新装备信息：${newGear.name}`
+    });
+    
+    editingGearId.value = null;
+  } else {
+    const newGear = { id: crypto.randomUUID(), ...form.value, damage: '' };
+    gears.value = [newGear, ...gears.value];
+    logEvent({
+      entityType: 'gear',
+      entityId: newGear.id,
+      entityName: newGear.name,
+      action: 'create',
+      afterState: newGear,
+      notes: `登记新装备「${newGear.name}」（${newGear.category}）`
+    });
+  }
+  
   form.value = { name: '', category: '帐篷天幕', owner: currentUser.value, available: iso(2), deposit: '100', status: '可借', notes: '', maintenanceCycleDays: 30, nextMaintenanceDate: iso(30), maintenanceReminderLevel: '标准' };
+}
+
+function editGear(gear) {
+  editingGearId.value = gear.id;
+  form.value = {
+    name: gear.name,
+    category: gear.category,
+    owner: gear.owner,
+    available: gear.available,
+    deposit: gear.deposit,
+    status: gear.status,
+    notes: gear.notes,
+    maintenanceCycleDays: gear.maintenanceCycleDays || 30,
+    nextMaintenanceDate: gear.nextMaintenanceDate || iso(30),
+    maintenanceReminderLevel: gear.maintenanceReminderLevel || '标准'
+  };
+}
+
+function cancelEditGear() {
+  editingGearId.value = null;
+  form.value = { name: '', category: '帐篷天幕', owner: currentUser.value, available: iso(2), deposit: '100', status: '可借', notes: '', maintenanceCycleDays: 30, nextMaintenanceDate: iso(30), maintenanceReminderLevel: '标准' };
+}
+
+function deleteGear(gear) {
+  const gearName = gear.name;
+  const relatedRequests = requests.value.filter((r) => r.gearId === gear.id || r.gearName === gearName);
+  const relatedHandovers = handoverRecords.value.filter((h) => h.gearId === gear.id || h.gearName === gearName);
+  const relatedDeposits = depositRecords.value.filter((d) => d.gearId === gear.id || d.gearName === gearName);
+  const relatedMaintenance = maintenanceRecords.value.filter((r) => r.gearId === gear.id);
+  const relatedTrips = trips.value.filter((t) => t.gears.some((g) => g.gearId === gear.id));
+  const relatedReservations = reservations.value.filter((r) => r.gearId === gear.id);
+  const relatedInventoryItems = [];
+  inventoryLists.value.forEach((inv) => {
+    inv.items?.forEach((item) => {
+      if (item.gearId === gear.id) relatedInventoryItems.push({ inventory: inv.name, item });
+    });
+  });
+
+  const hasRelations = relatedRequests.length > 0 || relatedHandovers.length > 0
+    || relatedDeposits.length > 0 || relatedMaintenance.length > 0
+    || relatedTrips.length > 0 || relatedReservations.length > 0
+    || relatedInventoryItems.length > 0;
+
+  let confirmMessage = `确定删除装备「${gearName}」吗？`;
+  if (hasRelations) {
+    const parts = [];
+    if (relatedRequests.length > 0) parts.push(`申请${relatedRequests.length}条`);
+    if (relatedHandovers.length > 0) parts.push(`交接${relatedHandovers.length}条`);
+    if (relatedDeposits.length > 0) parts.push(`押金${relatedDeposits.length}条`);
+    if (relatedMaintenance.length > 0) parts.push(`保养${relatedMaintenance.length}条`);
+    if (relatedTrips.length > 0) parts.push(`出行${relatedTrips.length}个`);
+    if (relatedReservations.length > 0) parts.push(`候补${relatedReservations.length}条`);
+    if (relatedInventoryItems.length > 0) parts.push(`盘点项${relatedInventoryItems.length}个`);
+    confirmMessage = `装备「${gearName}」存在关联数据（${parts.join('、')}），删除后关联记录将保留但无法匹配。确定删除吗？`;
+  }
+
+  if (!confirm(confirmMessage)) return;
+
+  const beforeState = { ...gear };
+  gears.value = gears.value.filter((g) => g.id !== gear.id);
+
+  logEvent({
+    entityType: 'gear',
+    entityId: gear.id,
+    entityName: gearName,
+    action: 'delete',
+    beforeState,
+    afterState: null,
+    notes: hasRelations
+      ? `删除装备「${gearName}」（存在关联数据）`
+      : `删除装备「${gearName}」`
+  });
+
+  if (editingGearId.value === gear.id) {
+    cancelEditGear();
+  }
 }
 
 const editingDraftId = ref(null);
@@ -1473,15 +1917,40 @@ function applyGear() {
   conflictDetails.value = [];
 
   if (editingDraftId.value) {
+    const oldReq = requests.value.find((r) => r.id === editingDraftId.value);
+    const beforeState = oldReq ? { ...oldReq } : null;
+    const newReq = { ...oldReq, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理' };
     requests.value = requests.value.map((item) =>
-      item.id === editingDraftId.value
-        ? { ...item, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理' }
-        : item
+      item.id === editingDraftId.value ? newReq : item
     );
+    logEvent({
+      entityType: 'request',
+      entityId: editingDraftId.value,
+      entityName: gear.name,
+      action: 'create',
+      beforeState,
+      afterState: newReq,
+      relatedEntityType: 'gear',
+      relatedEntityId: gear.id,
+      relatedEntityName: gear.name,
+      notes: `草稿提交为借用申请（借用人：${requestForm.value.borrower}，${requestForm.value.start}~${requestForm.value.end}）`
+    });
     editingDraftId.value = null;
     alert('草稿已提交');
   } else {
-    requests.value = [{ id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理', damage: '', ...requestForm.value }, ...requests.value];
+    const newReq = { id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '待处理', damage: '', ...requestForm.value };
+    requests.value = [newReq, ...requests.value];
+    logEvent({
+      entityType: 'request',
+      entityId: newReq.id,
+      entityName: gear.name,
+      action: 'create',
+      afterState: newReq,
+      relatedEntityType: 'gear',
+      relatedEntityId: gear.id,
+      relatedEntityName: gear.name,
+      notes: `提交借用申请（借用人：${newReq.borrower}，${newReq.start}~${newReq.end}）`
+    });
   }
   requestForm.value = { gearId: '', borrower: currentUser.value, start: iso(2), end: iso(4), reason: '' };
 }
@@ -1490,15 +1959,43 @@ function saveDraft() {
   const gear = gears.value.find((item) => item.id === requestForm.value.gearId);
   if (!gear || !requestForm.value.borrower) return;
   if (editingDraftId.value) {
+    const oldReq = requests.value.find((r) => r.id === editingDraftId.value);
+    const beforeState = oldReq ? { ...oldReq } : null;
     requests.value = requests.value.map((item) =>
       item.id === editingDraftId.value
         ? { ...item, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner }
         : item
     );
+    if (beforeState) {
+      logEvent({
+        entityType: 'request',
+        entityId: editingDraftId.value,
+        entityName: gear.name,
+        action: 'update',
+        beforeState,
+        afterState: { ...beforeState, ...requestForm.value, gearId: gear.id, gearName: gear.name, owner: gear.owner },
+        relatedEntityType: 'gear',
+        relatedEntityId: gear.id,
+        relatedEntityName: gear.name,
+        notes: `更新借用草稿（借用人：${requestForm.value.borrower}）`
+      });
+    }
     editingDraftId.value = null;
     alert('草稿已更新');
   } else {
-    requests.value = [{ id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '草稿', damage: '', ...requestForm.value }, ...requests.value];
+    const newReq = { id: crypto.randomUUID(), gearId: gear.id, gearName: gear.name, owner: gear.owner, status: '草稿', damage: '', ...requestForm.value };
+    requests.value = [newReq, ...requests.value];
+    logEvent({
+      entityType: 'request',
+      entityId: newReq.id,
+      entityName: gear.name,
+      action: 'create',
+      afterState: newReq,
+      relatedEntityType: 'gear',
+      relatedEntityId: gear.id,
+      relatedEntityName: gear.name,
+      notes: `保存借用草稿（借用人：${newReq.borrower}，${newReq.start}~${newReq.end}）`
+    });
     alert('草稿已保存');
   }
   requestForm.value = { gearId: '', borrower: currentUser.value, start: iso(2), end: iso(4), reason: '' };
@@ -1516,7 +2013,51 @@ function dismissConflictWarning() {
 
 function updateRequest(id, status) {
   const record = requests.value.find((item) => item.id === id);
+  if (!record) return;
+  const beforeState = { ...record };
   requests.value = requests.value.map((item) => item.id === id ? { ...item, status } : item);
+
+  if (status === '已同意') {
+    logEvent({
+      entityType: 'request',
+      entityId: record.id,
+      entityName: record.gearName,
+      action: 'approve',
+      beforeState,
+      afterState: { ...record, status },
+      relatedEntityType: 'gear',
+      relatedEntityId: record.gearId,
+      relatedEntityName: record.gearName,
+      notes: `借用人「${record.borrower}」的借用申请已同意`
+    });
+  } else if (status === '已拒绝') {
+    logEvent({
+      entityType: 'request',
+      entityId: record.id,
+      entityName: record.gearName,
+      action: 'reject',
+      beforeState,
+      afterState: { ...record, status },
+      relatedEntityType: 'gear',
+      relatedEntityId: record.gearId,
+      relatedEntityName: record.gearName,
+      notes: `借用人「${record.borrower}」的借用申请已拒绝`
+    });
+  } else if (status === '已归还') {
+    logEvent({
+      entityType: 'request',
+      entityId: record.id,
+      entityName: record.gearName,
+      action: 'complete',
+      beforeState,
+      afterState: { ...record, status },
+      relatedEntityType: 'gear',
+      relatedEntityId: record.gearId,
+      relatedEntityName: record.gearName,
+      notes: `借用人「${record.borrower}」已归还装备`
+    });
+  }
+
   if (record && status === '已同意') {
     gears.value = gears.value.map((gear) => gear.id === record.gearId ? { ...gear, status: '借出中' } : gear);
     const existingDeposit = getDepositByRequest(record.id);
@@ -1524,6 +2065,17 @@ function updateRequest(id, status) {
       const newDeposit = createDepositRecord(record.id);
       if (newDeposit) {
         depositRecords.value = [newDeposit, ...depositRecords.value];
+        logEvent({
+          entityType: 'deposit',
+          entityId: newDeposit.id,
+          entityName: newDeposit.gearName,
+          action: 'create',
+          afterState: newDeposit,
+          relatedEntityType: 'request',
+          relatedEntityId: record.id,
+          relatedEntityName: record.gearName,
+          notes: `为申请「${record.gearName} - ${record.borrower}」自动创建押金记录`
+        });
       }
     }
   }
@@ -1574,6 +2126,17 @@ function deleteRequest(id) {
   const record = requests.value.find((item) => item.id === id);
   if (!record) return;
   if (!confirm(`确定删除${record.status === '草稿' ? '草稿' : '申请'}「${record.gearName}」吗？`)) return;
+  logEvent({
+    entityType: 'request',
+    entityId: record.id,
+    entityName: record.gearName,
+    action: 'delete',
+    beforeState: record,
+    relatedEntityType: 'gear',
+    relatedEntityId: record.gearId,
+    relatedEntityName: record.gearName,
+    notes: `删除${record.status === '草稿' ? '草稿' : '申请'}（借用人：${record.borrower}）`
+  });
   requests.value = requests.value.filter((item) => item.id !== id);
   if (editingDraftId.value === id) {
     editingDraftId.value = null;
@@ -1598,14 +2161,31 @@ function saveMember() {
   if (!memberForm.value.nickname.trim()) return;
   if (editingMemberId.value) {
     const oldMember = members.value.find((m) => m.id === editingMemberId.value);
-    const oldNickname = oldMember ? oldMember.nickname : '';
+    if (!oldMember) return;
+    const oldNickname = oldMember.nickname;
     const newNickname = memberForm.value.nickname.trim();
+    const newMember = {
+      ...oldMember,
+      nickname: newNickname,
+      phone: memberForm.value.phone,
+      area: memberForm.value.area,
+      notes: memberForm.value.notes
+    };
     members.value = members.value.map((m) =>
-      m.id === editingMemberId.value
-        ? { ...m, nickname: newNickname, phone: memberForm.value.phone, area: memberForm.value.area, notes: memberForm.value.notes }
-        : m
+      m.id === editingMemberId.value ? newMember : m
     );
-    if (oldNickname !== newNickname) {
+
+    const isRename = oldNickname !== newNickname;
+    if (isRename) {
+      logEvent({
+        entityType: 'member',
+        entityId: oldMember.id,
+        entityName: newNickname,
+        action: 'rename',
+        beforeState: oldMember,
+        afterState: newMember,
+        notes: `成员「${oldNickname}」改名为「${newNickname}」，已同步更新关联数据`
+      });
       gears.value = gears.value.map((g) => g.owner === oldNickname ? { ...g, owner: newNickname } : g);
       requests.value = requests.value.map((r) => ({
         ...r,
@@ -1626,10 +2206,36 @@ function saveMember() {
       if (currentUser.value === oldNickname) currentUser.value = newNickname;
       if (form.value.owner === oldNickname) form.value.owner = newNickname;
       if (requestForm.value.borrower === oldNickname) requestForm.value.borrower = newNickname;
+    } else {
+      const hasChange = oldMember.phone !== newMember.phone || oldMember.area !== newMember.area || oldMember.notes !== newMember.notes;
+      if (hasChange) {
+        logEvent({
+          entityType: 'member',
+          entityId: oldMember.id,
+          entityName: newNickname,
+          action: 'update',
+          beforeState: oldMember,
+          afterState: newMember
+        });
+      }
     }
     editingMemberId.value = null;
   } else {
-    members.value = [{ id: crypto.randomUUID(), nickname: memberForm.value.nickname.trim(), phone: memberForm.value.phone, area: memberForm.value.area, notes: memberForm.value.notes }, ...members.value];
+    const newMember = {
+      id: crypto.randomUUID(),
+      nickname: memberForm.value.nickname.trim(),
+      phone: memberForm.value.phone,
+      area: memberForm.value.area,
+      notes: memberForm.value.notes
+    };
+    members.value = [newMember, ...members.value];
+    logEvent({
+      entityType: 'member',
+      entityId: newMember.id,
+      entityName: newMember.nickname,
+      action: 'create',
+      afterState: newMember
+    });
   }
   memberForm.value = { nickname: '', phone: '', area: '', notes: '' };
 }
@@ -1669,6 +2275,14 @@ function deleteMember(member) {
     deleteWarning.value = `无法删除「${nickname}」：该成员关联了${reasons.join('、')}，请先处理关联数据。`;
     return;
   }
+  logEvent({
+    entityType: 'member',
+    entityId: member.id,
+    entityName: nickname,
+    action: 'delete',
+    beforeState: member,
+    notes: '删除成员'
+  });
   members.value = members.value.filter((m) => m.id !== member.id);
   if (currentUser.value === nickname && members.value.length > 0) {
     currentUser.value = members.value[0].nickname;
@@ -1688,7 +2302,7 @@ function addMaintenance() {
     return;
   }
   const handler = maintenanceForm.value.handler.trim() || currentUser.value;
-  maintenanceRecords.value = [{
+  const newRecord = {
     id: crypto.randomUUID(),
     gearId: gear.id,
     gearName: gear.name,
@@ -1697,7 +2311,19 @@ function addMaintenance() {
     type: maintenanceForm.value.type,
     description: maintenanceForm.value.description,
     handler
-  }, ...maintenanceRecords.value];
+  };
+  maintenanceRecords.value = [newRecord, ...maintenanceRecords.value];
+  logEvent({
+    entityType: 'maintenance',
+    entityId: newRecord.id,
+    entityName: newRecord.gearName,
+    action: 'create',
+    afterState: newRecord,
+    relatedEntityType: 'gear',
+    relatedEntityId: gear.id,
+    relatedEntityName: gear.name,
+    notes: `登记保养记录「${newRecord.type}」：${newRecord.description || '无描述'}`
+  });
   maintenanceForm.value = { gearId: '', date: iso(0), type: '清洁', description: '', handler: '' };
 }
 
@@ -1713,7 +2339,7 @@ function handleCreateMaintenanceFromProfile({ gearId, type }) {
   const handler = currentUser.value;
   const description = `根据保养计划执行的${type}保养，周期${cycle}天。`;
 
-  maintenanceRecords.value = [{
+  const newRecord = {
     id: crypto.randomUUID(),
     gearId: gear.id,
     gearName: gear.name,
@@ -1722,13 +2348,35 @@ function handleCreateMaintenanceFromProfile({ gearId, type }) {
     type: type || '检查',
     description,
     handler
-  }, ...maintenanceRecords.value];
+  };
+  maintenanceRecords.value = [newRecord, ...maintenanceRecords.value];
+  logEvent({
+    entityType: 'maintenance',
+    entityId: newRecord.id,
+    entityName: newRecord.gearName,
+    action: 'create',
+    afterState: newRecord,
+    relatedEntityType: 'gear',
+    relatedEntityId: gear.id,
+    relatedEntityName: gear.name,
+    notes: `按保养计划自动创建「${newRecord.type}」记录，周期${cycle}天`
+  });
 
+  const beforeGear = { ...gear };
   gears.value = gears.value.map((g) =>
     g.id === gear.id
       ? { ...g, nextMaintenanceDate: nextDate }
       : g
   );
+  logEvent({
+    entityType: 'gear',
+    entityId: gear.id,
+    entityName: gear.name,
+    action: 'update',
+    beforeState: beforeGear,
+    afterState: { ...gear, nextMaintenanceDate: nextDate },
+    notes: `更新装备下次保养日期为 ${nextDate}`
+  });
 
   alert(`已为「${gear.name}」创建保养记录，下次保养日期自动更新为 ${nextDate}`);
 }
@@ -1745,7 +2393,7 @@ function handleProcessAbnormalAction({ action, item, inventoryId, inventoryName 
       ? `盘点异常处理：${action.description}（来源：${inventoryName}）`
       : `盘点异常触发的保养（来源：${inventoryName}）`;
 
-    maintenanceRecords.value = [{
+    const newRecord = {
       id: recordId,
       gearId: gear.id,
       gearName: gear.name,
@@ -1754,14 +2402,39 @@ function handleProcessAbnormalAction({ action, item, inventoryId, inventoryName 
       type: '检查',
       description,
       handler: action.handler || currentUser.value
-    }, ...maintenanceRecords.value];
+    };
+    maintenanceRecords.value = [newRecord, ...maintenanceRecords.value];
+    logEvent({
+      entityType: 'maintenance',
+      entityId: recordId,
+      entityName: gear.name,
+      action: 'create',
+      afterState: newRecord,
+      relatedEntityType: 'inventory',
+      relatedEntityId: inventoryId,
+      relatedEntityName: inventoryName,
+      notes: `盘点「${inventoryName}」异常处理触发保养记录`
+    });
 
     const cycle = Number(gear.maintenanceCycleDays) || 30;
+    const beforeGear = { ...gear };
     gears.value = gears.value.map((g) =>
       g.id === gear.id
         ? { ...g, nextMaintenanceDate: iso(cycle) }
         : g
     );
+    logEvent({
+      entityType: 'gear',
+      entityId: gear.id,
+      entityName: gear.name,
+      action: 'update',
+      beforeState: beforeGear,
+      afterState: { ...gear, nextMaintenanceDate: iso(cycle) },
+      relatedEntityType: 'inventory',
+      relatedEntityId: inventoryId,
+      relatedEntityName: inventoryName,
+      notes: `盘点后更新装备下次保养日期`
+    });
 
     inventoryLists.value = inventoryLists.value.map((list) => {
       if (list.id !== inventoryId) return list;
@@ -1787,16 +2460,44 @@ function handleProcessAbnormalAction({ action, item, inventoryId, inventoryName 
     if (!gear) return;
     const damageText = action.description || '盘点发现损耗';
     const existingDamage = (gear.damage || '').trim();
+    const newDamage = existingDamage ? `${existingDamage}；${damageText}` : damageText;
+    const beforeGear = { ...gear };
     gears.value = gears.value.map((g) =>
       g.id === gear.id
-        ? { ...g, damage: existingDamage ? `${existingDamage}；${damageText}` : damageText }
+        ? { ...g, damage: newDamage }
         : g
     );
+    logEvent({
+      entityType: 'gear',
+      entityId: gear.id,
+      entityName: gear.name,
+      action: 'update',
+      beforeState: beforeGear,
+      afterState: { ...gear, damage: newDamage },
+      relatedEntityType: 'inventory',
+      relatedEntityId: inventoryId,
+      relatedEntityName: inventoryName,
+      notes: `盘点「${inventoryName}」发现装备损耗：${damageText}`
+    });
   }
 }
 
 function deleteMaintenance(id) {
   if (!confirm('确定删除该保养记录？')) return;
+  const record = maintenanceRecords.value.find((r) => r.id === id);
+  if (record) {
+    logEvent({
+      entityType: 'maintenance',
+      entityId: record.id,
+      entityName: record.gearName,
+      action: 'delete',
+      beforeState: record,
+      relatedEntityType: 'gear',
+      relatedEntityId: record.gearId,
+      relatedEntityName: record.gearName,
+      notes: `删除保养记录「${record.type}」：${record.description || '无描述'}`
+    });
+  }
   maintenanceRecords.value = maintenanceRecords.value.filter((r) => r.id !== id);
 }
 
@@ -2404,7 +3105,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
     </header>
 
     <nav class="tabs">
-      <button v-for="item in ['装备库','装备推荐','申请列表','预约排程','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','费用结算','成员资料','我的借出','我的借入','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
+      <button v-for="item in ['装备库','装备推荐','申请列表','预约排程','借用日历','交接确认单','押金台账','保养记录','出行清单','装备盘点','费用结算','成员资料','我的借出','我的借入','操作时间线','数据导入导出']" :key="item" :class="{ active: tab === item }" @click="tab = item">{{ item }}</button>
     </nav>
 
     <section class="metrics">
@@ -2425,7 +3126,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
 
     <section v-if="tab === '装备库'" class="layout">
       <form class="panel" @submit.prevent="addGear">
-        <h2>登记装备</h2>
+        <h2>{{ editingGearId ? '编辑装备' : '登记装备' }}</h2>
         <input v-model="form.name" placeholder="装备名称" />
         <select v-model="form.category">
           <option>帐篷天幕</option>
@@ -2463,7 +3164,10 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
           </div>
         </div>
         <textarea v-model="form.notes" placeholder="使用注意事项"></textarea>
-        <button>保存装备</button>
+        <div class="split">
+          <button>{{ editingGearId ? '保存修改' : '保存装备' }}</button>
+          <button v-if="editingGearId" type="button" class="ghost" @click="cancelEditGear">取消</button>
+        </div>
       </form>
 
       <div class="panel wide">
@@ -2521,6 +3225,10 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
             >
               📋 查看装备健康档案
             </button>
+            <div class="actions" style="margin-top: 8px; display: flex; gap: 8px;">
+              <button class="ghost small" style="flex: 1;" @click="editGear(gear)">编辑</button>
+              <button class="ghost small danger" style="flex: 1;" @click="deleteGear(gear)">删除</button>
+            </div>
           </article>
         </div>
       </div>
@@ -2804,6 +3512,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
         :health-info-map="healthInfoMap"
         @update:reservations="handleReservationPanelUpdate"
         @create-request="handleReservationPanelCreateRequest"
+        @log-event="logEvent"
       />
     </section>
 
@@ -3247,6 +3956,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       :current-user="currentUser"
       @update:inventory-lists="val => inventoryLists = val"
       @process-abnormal-action="handleProcessAbnormalAction"
+      @log-event="logEvent"
     />
 
     <SettlementPanel
@@ -3260,6 +3970,15 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       :inventory-lists="inventoryLists"
       :current-user="currentUser"
       @update:settlement-records="val => settlementRecords = val"
+      @log-event="logEvent"
+    />
+
+    <EventTimeline
+      v-if="tab === '操作时间线'"
+      :event-logs="eventLogs"
+      :members="members"
+      :gears="gears"
+      :current-user="currentUser"
     />
 
     <section v-if="tab === '我的借出' || tab === '我的借入'" class="panel">
@@ -3278,6 +3997,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       :spaceData="getCurrentSpaceData() || {}"
       :spaceInfo="currentSpace"
       @imported="handleDataImported"
+      @log-event="logEvent"
     />
 
     <div v-if="showHealthProfile" class="health-modal-overlay" @click.self="closeHealthProfile">

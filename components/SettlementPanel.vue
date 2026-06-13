@@ -279,7 +279,7 @@ const props = defineProps({
   currentUser: { type: String, default: '' }
 });
 
-const emit = defineEmits(['update:settlementRecords']);
+const emit = defineEmits(['update:settlementRecords', 'log-event']);
 
 const selectedId = ref(null);
 const showExpenseForm = ref(false);
@@ -353,6 +353,7 @@ function handleTripChange() {
 
 function handleCreate() {
   let newRecord;
+  let oldRecord = null;
   if (createForm.value.tripId) {
     newRecord = settlement.createForTrip(createForm.value.tripId);
     if (createForm.value.name.trim()) {
@@ -369,6 +370,14 @@ function handleCreate() {
     );
   }
   if (!newRecord) return;
+  emit('log-event', {
+    entityType: 'settlement',
+    entityId: newRecord.id,
+    entityName: newRecord.name,
+    action: 'create',
+    afterState: newRecord,
+    notes: `创建结算单「${newRecord.name}」（${newRecord.members.length}人）${newRecord.tripName ? `，关联出行「${newRecord.tripName}」` : ''}`
+  });
   updateRecords([newRecord, ...props.settlementRecords]);
   selectedId.value = newRecord.id;
   createForm.value = { name: '', tripId: '', memberIds: [] };
@@ -376,6 +385,17 @@ function handleCreate() {
 
 function handleDelete(id) {
   if (!confirm('确定删除该结算单吗？')) return;
+  const record = props.settlementRecords.find((s) => s.id === id);
+  if (record) {
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: id,
+      entityName: record.name,
+      action: 'delete',
+      beforeState: record,
+      notes: `删除结算单「${record.name}」`
+    });
+  }
   updateRecords(props.settlementRecords.filter((s) => s.id !== id));
   if (selectedId.value === id) {
     selectedId.value = null;
@@ -383,14 +403,41 @@ function handleDelete(id) {
 }
 
 function handleStatusChange(newStatus) {
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? { ...oldRecord } : null;
   const newRecord = settlement.updateStatus(selectedId.value, newStatus);
   applyUpdate(newRecord);
+  if (beforeState && beforeState.status !== newStatus) {
+    let action = 'update';
+    if (newStatus === '已确认') action = 'confirm';
+    else if (newStatus === '已结算') action = 'settle';
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState.name,
+      action,
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState.name}」状态从「${beforeState.status}」改为「${newStatus}」`
+    });
+  }
 }
 
 function handleRefreshDeposits() {
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? { ...oldRecord } : null;
   const newRecord = settlement.refreshFromDeposits(selectedId.value);
   if (newRecord) {
     applyUpdate(newRecord);
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState?.name || '结算单',
+      action: 'update',
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState?.name}」从押金台账同步数据`
+    });
     alert('已从押金台账同步最新数据');
   }
 }
@@ -398,20 +445,66 @@ function handleRefreshDeposits() {
 function handleMemberDeduct(memberIndex, depositIndex, value) {
   const val = Number(value);
   if (isNaN(val) || val < 0) return;
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? JSON.parse(JSON.stringify(oldRecord)) : null;
+  const oldDeduct = oldRecord?.members?.[memberIndex]?.depositDeducts?.[depositIndex] ?? 0;
   const newRecord = settlement.setMemberDeduct(selectedId.value, memberIndex, depositIndex, val);
   applyUpdate(newRecord);
+  if (beforeState && Number(oldDeduct) !== val && val > 0) {
+    const memberName = beforeState.members?.[memberIndex]?.memberName || '成员';
+    const depositName = beforeState.members?.[memberIndex]?.depositItems?.[depositIndex]?.gearName || '装备';
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState.name,
+      action: 'deduct',
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState.name}」：${memberName} 的 ${depositName} 押金扣款 ¥${val - Number(oldDeduct)}`
+    });
+  }
 }
 
 function handleMemberPayment(memberIndex, value) {
   const val = Number(value);
   if (isNaN(val) || val < 0) return;
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? JSON.parse(JSON.stringify(oldRecord)) : null;
+  const oldPayment = oldRecord?.members?.[memberIndex]?.paidAmount || 0;
   const newRecord = settlement.setMemberPayment(selectedId.value, memberIndex, val);
   applyUpdate(newRecord);
+  if (beforeState && Number(oldPayment) !== val) {
+    const memberName = beforeState.members?.[memberIndex]?.memberName || '成员';
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState.name,
+      action: 'update',
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState.name}」：${memberName} 支付金额从 ¥${oldPayment} 改为 ¥${val}`
+    });
+  }
 }
 
 function handleMemberNotes(memberIndex, value) {
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? JSON.parse(JSON.stringify(oldRecord)) : null;
+  const oldNotes = oldRecord?.members?.[memberIndex]?.notes || '';
+  const memberName = oldRecord?.members?.[memberIndex]?.name || `成员${memberIndex + 1}`;
   const newRecord = settlement.setMemberNotes(selectedId.value, memberIndex, value);
   applyUpdate(newRecord);
+  if (newRecord && beforeState && oldNotes !== value) {
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState.name,
+      action: 'update',
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState.name}」：${memberName} 备注从「${oldNotes || '无'}」改为「${value || '无'}」`
+    });
+  }
 }
 
 function handleAddExpense() {
@@ -423,25 +516,66 @@ function handleAddExpense() {
     alert('请输入有效金额');
     return;
   }
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? JSON.parse(JSON.stringify(oldRecord)) : null;
   const newRecord = settlement.addExpense(selectedId.value, {
     name: expenseForm.value.name.trim(),
     amount: String(expenseForm.value.amount),
     paidBy: expenseForm.value.paidBy
   });
   applyUpdate(newRecord);
+  if (newRecord && beforeState) {
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState.name,
+      action: 'update',
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState.name}」新增公共费用：${expenseForm.value.name.trim()} ¥${expenseForm.value.amount}（${expenseForm.value.paidBy}垫付）`
+    });
+  }
   expenseForm.value = { name: '', amount: '', paidBy: props.currentUser || '' };
   showExpenseForm.value = false;
 }
 
 function handleRemoveExpense(expenseId) {
   if (!confirm('确定删除该费用项吗？')) return;
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? JSON.parse(JSON.stringify(oldRecord)) : null;
+  const expense = oldRecord?.extraExpenses?.find((e) => e.id === expenseId);
   const newRecord = settlement.deleteExpense(selectedId.value, expenseId);
   applyUpdate(newRecord);
+  if (expense && beforeState) {
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState.name,
+      action: 'update',
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState.name}」删除公共费用：${expense.name} ¥${expense.amount}`
+    });
+  }
 }
 
 function handleNotesChange(value) {
+  const oldRecord = settlement.getById(selectedId.value);
+  const beforeState = oldRecord ? { ...oldRecord } : null;
+  const oldNotes = oldRecord?.notes || '';
   const newRecord = settlement.updateInfo(selectedId.value, { notes: value });
   applyUpdate(newRecord);
+  if (newRecord && beforeState && oldNotes !== value) {
+    emit('log-event', {
+      entityType: 'settlement',
+      entityId: selectedId.value,
+      entityName: beforeState.name,
+      action: 'update',
+      beforeState,
+      afterState: newRecord,
+      notes: `结算单「${beforeState.name}」备注从「${oldNotes || '无'}」改为「${value || '无'}」`
+    });
+  }
 }
 </script>
 

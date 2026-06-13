@@ -9,6 +9,7 @@ import {
   normalizeDepositRecords,
   normalizeInventoryLists,
   normalizeSettlementRecords,
+  normalizeEventLogs,
   DATA_ENTITIES,
   performMerge,
   analyzeMergeData
@@ -116,7 +117,8 @@ export function createEmptySpaceData() {
     depositRecords: [],
     inventoryLists: [],
     settlementRecords: [],
-    reservations: []
+    reservations: [],
+    eventLogs: []
   };
 }
 
@@ -177,7 +179,8 @@ export function loadSpaceData(spaceId, onError = null) {
     const inventoryLists = normalizeInventoryLists(data.inventoryLists || [], gears, trips, members).data;
     const settlementRecords = normalizeSettlementRecords(data.settlementRecords || [], gears, members, depositRecords).data;
     const reservations = normalizeReservations(data.reservations || [], gears, members).data;
-    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords, inventoryLists, settlementRecords, reservations };
+    const eventLogs = normalizeEventLogs(data.eventLogs || []).data;
+    return { members, gears, requests, maintenanceRecords, trips, handoverRecords, depositRecords, inventoryLists, settlementRecords, reservations, eventLogs };
   } catch (e) {
     if (onError) onError(`加载空间数据时出错：${e.message}。已加载空白数据。`);
     return createEmptySpaceData();
