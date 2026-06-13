@@ -183,7 +183,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:reservations', 'activate']);
+const emit = defineEmits(['update:reservations', 'activate', 'create-request']);
 
 const statusFilter = ref('全部状态');
 const gearFilter = ref('全部装备');
@@ -316,11 +316,19 @@ function handleCancel(reservationId) {
 }
 
 function handleManualActivate(reservationId) {
+  const result = reservation.doActivate(reservationId);
+  if (!result.ok) {
+    const messages = result.errors.map((e) => e.message).join('\n');
+    alert(`无法转正：\n${messages}`);
+    return;
+  }
   if (!confirm('确定将该候补预约手动转正吗？转正后将生成一条借用申请。')) return;
-  const updated = reservation.doActivate(reservationId);
-  if (updated) {
-    updateReservations(props.reservations.map((r) => (r.id === reservationId ? updated : r)));
-    emit('activate', updated);
+  if (result.reservation) {
+    updateReservations(props.reservations.map((r) => (r.id === reservationId ? result.reservation : r)));
+    emit('activate', result.reservation);
+    if (result.request) {
+      emit('create-request', result.request);
+    }
   }
 }
 

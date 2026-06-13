@@ -163,7 +163,8 @@ function normalizeRequests(storedRequests, gearList) {
       end: req.end || req.start || iso(0),
       status: req.status || '待处理',
       reason: req.reason || '',
-      damage: req.damage || ''
+      damage: req.damage || '',
+      fromReservationId: req.fromReservationId || ''
     };
   }).filter(Boolean);
 }
@@ -594,11 +595,14 @@ function triggerReservationCheck() {
   if (result.list) {
     reservations.value = result.list;
   }
-  if (result.activated.length > 0) {
-    for (const resId of result.activated) {
-      const res = reservations.value.find((r) => r.id === resId);
-      if (res) {
-        handleReservationActivated(res);
+  if (result.newRequests && result.newRequests.length > 0) {
+    for (const req of result.newRequests) {
+      requests.value = [req, ...requests.value];
+    }
+    if (result.activated.length > 0) {
+      const firstRes = reservations.value.find((r) => r.id === result.activated[0]);
+      if (firstRes) {
+        alert(`候补预约「${firstRes.gearName}」已自动转正，已生成借用申请`);
       }
     }
   }
@@ -622,7 +626,8 @@ function handleReservationActivated(reservation) {
     end: reservation.end,
     status: '待处理',
     reason: `候补转正（原候补原因：${reservation.reason}）`,
-    damage: ''
+    damage: '',
+    fromReservationId: reservation.id
   };
   requests.value = [newRequest, ...requests.value];
   alert(`候补预约「${reservation.gearName}」已自动转正，已生成借用申请`);
@@ -1896,6 +1901,12 @@ function handleReservationPanelActivate(reservation) {
   handleReservationActivated(reservation);
 }
 
+function handleReservationPanelCreateRequest(request) {
+  if (!request) return;
+  requests.value = [request, ...requests.value];
+  alert(`候补转正成功，已生成借用申请：${request.gearName}`);
+}
+
 function addReservationFromShortcut() {
   if (!reservationShortcut.value.gearId) {
     alert('请选择装备');
@@ -2322,6 +2333,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
         :health-info-map="healthInfoMap"
         @update:reservations="handleReservationPanelUpdate"
         @activate="handleReservationPanelActivate"
+        @create-request="handleReservationPanelCreateRequest"
       />
     </section>
 

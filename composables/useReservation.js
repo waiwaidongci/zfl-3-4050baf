@@ -9,7 +9,9 @@ import {
   expireOutdatedReservations,
   recalcAllPriorities,
   getReservationStats,
-  RESERVATION_STATUSES
+  RESERVATION_STATUSES,
+  validateActivation,
+  createRequestFromReservation
 } from '../utils/reservationTransform.js';
 
 function resolve(val) {
@@ -87,8 +89,27 @@ export function useReservation({ reservations, gears, requests, handovers, membe
 
   function doActivate(reservationId) {
     const reservation = reservationList.value.find((r) => r.id === reservationId);
-    if (!reservation || reservation.status !== '候补中') return null;
-    return activateReservation(reservation);
+    if (!reservation) return { ok: false, errors: [{ code: 'not_found', message: '候补记录不存在' }], reservation: null, request: null };
+
+    const validation = validateActivation(reservation, {
+      requests: requestList.value,
+      gears: gearList.value
+    });
+
+    if (!validation.ok) {
+      return { ok: false, errors: validation.errors, reservation: null, request: null };
+    }
+
+    const gear = gearList.value.find((g) => g.id === reservation.gearId);
+    const newRequest = createRequestFromReservation(reservation, gear);
+    const updatedReservation = activateReservation(reservation, newRequest.id);
+
+    return {
+      ok: true,
+      errors: [],
+      reservation: updatedReservation,
+      request: newRequest
+    };
   }
 
   function checkAndActivate() {
@@ -100,15 +121,23 @@ export function useReservation({ reservations, gears, requests, handovers, membe
       gears: gearList.value
     });
 
+    const newRequests = [];
     const updated = withPriorities.map((r) => {
       if (activatable && r.id === activatable.id) {
-        return activateReservation(r);
+        const gear = gearList.value.find((g) => g.id === r.gearId);
+        const newRequest = createRequestFromReservation(r, gear);
+        newRequests.push(newRequest);
+        return activateReservation(r, newRequest.id);
       }
       return r;
     });
 
     const finalList = computeQueuePositions(updated);
-    return { list: finalList, activated: activatable ? [activatable.id] : [] };
+    return {
+      list: finalList,
+      activated: activatable ? [activatable.id] : [],
+      newRequests
+    };
   }
 
   function recalcPriorities() {

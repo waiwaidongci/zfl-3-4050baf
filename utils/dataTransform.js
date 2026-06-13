@@ -112,7 +112,8 @@ export function normalizeRequests(rawRequests, gearList) {
       end: req.end || req.start || iso(0),
       status: req.status || '待处理',
       reason: req.reason || '',
-      damage: req.damage || ''
+      damage: req.damage || '',
+      fromReservationId: req.fromReservationId || ''
     };
   }).filter(Boolean);
   return { data, warnings };

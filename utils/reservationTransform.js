@@ -20,6 +20,7 @@ export function createReservation({ gearId, gearName, owner, borrower, start, en
     reason: reason || '装备借出中',
     notes: notes || '',
     requestId: requestId || '',
+    generatedRequestId: '',
     priorityScore: 0,
     queuePosition: 0,
     createdAt: new Date().toISOString(),
@@ -84,7 +85,7 @@ export function computeQueuePositions(reservations) {
 }
 
 export function findActivatableReservations(reservations, { requests, gears }) {
-  const activeReservations = reservations.filter((r) => r.status === '候补中');
+  const activeReservations = reservations.filter((r) => r.status === '候补中' && !r.generatedRequestId);
   const activatable = [];
 
   for (const reservation of activeReservations) {
@@ -95,6 +96,7 @@ export function findActivatableReservations(reservations, { requests, gears }) {
       if (req.gearId !== reservation.gearId) return false;
       if (req.status === '已拒绝' || req.status === '已归还') return false;
       if (req.id === reservation.requestId) return false;
+      if (req.id === reservation.generatedRequestId) return false;
       const reqStart = new Date(req.start);
       const reqEnd = new Date(req.end);
       const resStart = new Date(reservation.start);
@@ -115,13 +117,77 @@ export function findActivatableReservations(reservations, { requests, gears }) {
   return sorted.length > 0 ? sorted[0] : null;
 }
 
-export function activateReservation(reservation) {
+export function createRequestFromReservation(reservation, gear = null) {
+  return {
+    id: crypto.randomUUID(),
+    gearId: reservation.gearId,
+    gearName: reservation.gearName || '未知装备',
+    owner: reservation.owner || (gear ? gear.owner : ''),
+    borrower: reservation.borrower || '',
+    start: reservation.start,
+    end: reservation.end,
+    status: '待处理',
+    reason: `候补转正（原候补原因：${reservation.reason || '其他'}）`,
+    damage: '',
+    fromReservationId: reservation.id
+  };
+}
+
+export function activateReservation(reservation, generatedRequestId = '') {
   return {
     ...reservation,
     status: '已转正',
+    generatedRequestId: generatedRequestId || reservation.generatedRequestId || '',
     activatedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+}
+
+export function validateActivation(reservation, { requests, gears }) {
+  const errors = [];
+  if (!reservation) {
+    errors.push({ code: 'not_found', message: '候补记录不存在' });
+    return { ok: false, errors };
+  }
+
+  if (reservation.status !== '候补中') {
+    errors.push({ code: 'invalid_status', message: `当前状态为「${reservation.status}」，仅「候补中」可转正` });
+  }
+
+  if (reservation.generatedRequestId) {
+    errors.push({ code: 'already_has_request', message: '该候补已生成过借用申请，请勿重复操作' });
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  if (reservation.end < today) {
+    errors.push({ code: 'expired', message: `候补已过期（期望归还日期 ${reservation.end} 早于今日）` });
+  }
+
+  const gear = (gears || []).find((g) => g.id === reservation.gearId);
+  if (!gear) {
+    errors.push({ code: 'gear_missing', message: `装备「${reservation.gearName || '未知装备'}」不存在于装备库` });
+  } else if (gear.status !== '可借') {
+    errors.push({ code: 'gear_unavailable', message: `装备「${gear.name}」当前状态为「${gear.status}」，不可借出` });
+  }
+
+  const conflictingRequests = (requests || []).filter((req) => {
+    if (req.gearId !== reservation.gearId) return false;
+    if (req.status === '已拒绝' || req.status === '已归还') return false;
+    if (req.id === reservation.requestId) return false;
+    if (req.id === reservation.generatedRequestId) return false;
+    const reqStart = new Date(req.start);
+    const reqEnd = new Date(req.end);
+    const resStart = new Date(reservation.start);
+    const resEnd = new Date(reservation.end);
+    return resStart <= reqEnd && resEnd >= reqStart;
+  });
+
+  if (conflictingRequests.length > 0) {
+    const details = conflictingRequests.map((c) => `${c.borrower}（${c.start}~${c.end}，${c.status}）`).join('；');
+    errors.push({ code: 'date_conflict', message: `装备借用日期存在冲突：${details}` });
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
 export function cancelReservation(reservation) {
@@ -180,6 +246,7 @@ export function normalizeReservations(rawReservations, gearList, memberList) {
       reason: record.reason || '',
       notes: record.notes || '',
       requestId: record.requestId || '',
+      generatedRequestId: record.generatedRequestId || '',
       priorityScore: typeof record.priorityScore === 'number' ? record.priorityScore : 0,
       queuePosition: typeof record.queuePosition === 'number' ? record.queuePosition : 0,
       createdAt: record.createdAt || new Date().toISOString(),
