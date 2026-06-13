@@ -463,6 +463,12 @@ export function validateAndNormalizeImportData(rawData) {
     rawData.maintenance !== undefined || rawData.trips !== undefined || rawData.handovers !== undefined || rawData.deposits !== undefined
   );
 
+  const isTemplateFormat = rawData._isTemplate === true;
+
+  if (isTemplateFormat) {
+    allWarnings.push(`检测到模板数据（来源：${rawData._templateName || '未知模板'}），导入时将保留数据但忽略模板标记`);
+  }
+
   const entityPresence = {
     members: rawData.members !== undefined,
     gears: rawData.gears !== undefined,
@@ -498,7 +504,9 @@ export function validateAndNormalizeImportData(rawData) {
   const normalizedData = {};
   const summary = {
     totalWarnings: 0,
-    hasLegacyFormat: isLegacyFormat
+    hasLegacyFormat: isLegacyFormat,
+    isTemplateFormat,
+    templateName: isTemplateFormat ? (rawData._templateName || '') : ''
   };
 
   const membersResult = normalizeMembers(source.members);

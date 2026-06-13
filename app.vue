@@ -19,7 +19,10 @@ import {
   SPACE_DATA_PREFIX,
   hasOldData,
   iso,
-  useSpaceStorage
+  useSpaceStorage,
+  TEMPLATE_ENTITY_LABELS,
+  TEMPLATE_CONFIG_ENTITY_LABELS,
+  TEMPLATE_BUSINESS_ENTITY_LABELS
 } from './composables/useSpaceStorage.js';
 
 const storage = useSpaceStorage();
@@ -33,6 +36,10 @@ const {
   ensureSpaceDataLoaded,
   saveSpace,
   createNewSpace,
+  createSpaceFromTemplate,
+  saveCurrentSpaceAsTemplate,
+  getAvailableTemplates,
+  deleteTemplate,
   updateSpaceById,
   deleteSpaceById,
   switchToSpace,
@@ -46,6 +53,20 @@ const spaceModalMode = ref('create');
 const editingSpaceId = ref(null);
 const spaceForm = ref({ name: '', description: '' });
 const showSpaceMenu = ref(false);
+
+const showTemplateModal = ref(false);
+const templateModalMode = ref('save');
+const templateForm = ref({ name: '', selectedEntities: Object.keys(TEMPLATE_ENTITY_LABELS) });
+const cloneForm = ref({
+  templateId: '',
+  copyMembers: true,
+  copyGears: true,
+  copyMaintenanceRecords: true,
+  copyDepositRules: true,
+  copyExampleTrips: false,
+  clearBusinessFlow: true
+});
+const templateList = ref([]);
 
 function createDefaultMembers() {
   return [
@@ -545,6 +566,147 @@ function toggleSpaceMenu() {
 
 function closeSpaceMenu() {
   showSpaceMenu.value = false;
+}
+
+function refreshTemplateList() {
+  templateList.value = getAvailableTemplates();
+}
+
+function openSaveTemplateModal() {
+  templateModalMode.value = 'save';
+  templateForm.value = {
+    name: (currentSpace.value?.name || '空间') + ' 模板',
+    selectedEntities: Object.keys(TEMPLATE_ENTITY_LABELS)
+  };
+  showTemplateModal.value = true;
+  closeSpaceMenu();
+}
+
+function openCloneFromTemplateModal() {
+  refreshTemplateList();
+  if (templateList.value.length === 0) {
+    alert('暂无可用模板。请先将当前空间保存为模板。');
+    return;
+  }
+  templateModalMode.value = 'clone';
+  cloneForm.value = {
+    templateId: templateList.value[0].id,
+    copyMembers: true,
+    copyGears: true,
+    copyMaintenanceRecords: true,
+    copyDepositRules: true,
+    copyExampleTrips: false,
+    clearBusinessFlow: true
+  };
+  spaceForm.value = { name: '', description: '' };
+  showTemplateModal.value = true;
+  closeSpaceMenu();
+}
+
+function openTemplateListModal() {
+  refreshTemplateList();
+  templateModalMode.value = 'list';
+  showTemplateModal.value = true;
+  closeSpaceMenu();
+}
+
+function closeTemplateModal() {
+  showTemplateModal.value = false;
+  templateForm.value = { name: '', selectedEntities: Object.keys(TEMPLATE_ENTITY_LABELS) };
+  cloneForm.value = {
+    templateId: '',
+    copyMembers: true,
+    copyGears: true,
+    copyMaintenanceRecords: true,
+    copyDepositRules: true,
+    copyExampleTrips: false,
+    clearBusinessFlow: true
+  };
+}
+
+function saveTemplateAction() {
+  if (!templateForm.value.name.trim()) {
+    alert('请输入模板名称');
+    return;
+  }
+  const result = saveCurrentSpaceAsTemplate(
+    templateForm.value.name,
+    templateForm.value.selectedEntities
+  );
+  if (result) {
+    logEvent({
+      entityType: 'space',
+      entityId: currentSpaceId.value,
+      entityName: currentSpace.value?.name || '当前空间',
+      action: 'export',
+      notes: `保存为模板「${result.name}」`
+    });
+    alert(`模板「${result.name}」保存成功！`);
+    closeTemplateModal();
+  } else {
+    alert('保存模板失败，请重试');
+  }
+}
+
+function cloneFromTemplateAction() {
+  if (!spaceForm.value.name.trim()) {
+    alert('请输入新空间名称');
+    return;
+  }
+  if (!cloneForm.value.templateId) {
+    alert('请选择模板');
+    return;
+  }
+  const newSpace = createSpaceFromTemplate(
+    spaceForm.value.name,
+    spaceForm.value.description,
+    cloneForm.value.templateId,
+    {
+      copyMembers: cloneForm.value.copyMembers,
+      copyGears: cloneForm.value.copyGears,
+      copyMaintenanceRecords: cloneForm.value.copyMaintenanceRecords,
+      copyDepositRules: cloneForm.value.copyDepositRules,
+      copyExampleTrips: cloneForm.value.copyExampleTrips,
+      clearBusinessFlow: cloneForm.value.clearBusinessFlow
+    }
+  );
+  if (newSpace) {
+    logEvent({
+      entityType: 'space',
+      entityId: newSpace.id,
+      entityName: newSpace.name,
+      action: 'create',
+      notes: `从模板创建空间「${newSpace.name}」`
+    });
+    switchSpace(newSpace.id);
+    alert(`空间「${newSpace.name}」已从模板创建成功！`);
+    closeTemplateModal();
+  } else {
+    alert('从模板创建空间失败，请重试');
+  }
+}
+
+function deleteTemplateAction(templateId) {
+  const tmpl = templateList.value.find((t) => t.id === templateId);
+  if (!tmpl) return;
+  if (!confirm(`确定删除模板「${tmpl.name}」吗？此操作不可恢复。`)) return;
+  deleteTemplate(templateId);
+  refreshTemplateList();
+  logEvent({
+    entityType: 'space',
+    entityId: currentSpaceId.value,
+    entityName: currentSpace.value?.name || '空间',
+    action: 'delete',
+    notes: `删除模板「${tmpl.name}」`
+  });
+}
+
+function getTemplateEntitySummary(template) {
+  if (!template || !template.entitySummary) return '';
+  return Object.entries(template.entitySummary)
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => `${TEMPLATE_ENTITY_LABELS[key] || key} ${count}`)
+    .join('、');
 }
 
 const members = computed({
@@ -3071,7 +3233,10 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
           <div v-if="showSpaceMenu" class="space-menu" @click.stop>
             <div class="space-menu-header">
               <strong>切换社群空间</strong>
-              <button class="ghost small" @click="openCreateSpaceModal">+ 新建</button>
+              <div class="space-menu-header-actions">
+                <button class="ghost small" @click="openCloneFromTemplateModal">📋 从模板</button>
+                <button class="ghost small" @click="openCreateSpaceModal">+ 新建</button>
+              </div>
             </div>
             <div class="space-menu-list">
               <div
@@ -3089,6 +3254,17 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
                   <button v-if="spaces.length > 1" class="ghost small danger" @click.stop="deleteSpace(space.id)">删除</button>
                 </div>
               </div>
+            </div>
+            <div class="space-menu-divider"></div>
+            <div class="space-menu-template-section">
+              <div class="space-menu-template-header">
+                <strong>空间模板</strong>
+                <div class="space-menu-header-actions">
+                  <button class="ghost small" @click="openSaveTemplateModal">💾 存模板</button>
+                  <button class="ghost small" @click="openTemplateListModal">📋 管理</button>
+                </div>
+              </div>
+              <p class="muted" style="font-size: 12px; margin: 4px 0 0;">将当前空间配置保存为模板，快速复用到新空间</p>
             </div>
             <div class="space-menu-footer muted">
               共 {{ spaces.length }} 个空间 · 数据各自独立
@@ -4000,6 +4176,130 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       @log-event="logEvent"
     />
 
+    <div v-if="showTemplateModal" class="template-modal-overlay" @click.self="closeTemplateModal">
+      <div class="template-modal-container">
+        <div class="template-modal-header">
+          <h2 v-if="templateModalMode === 'save'">💾 保存为模板</h2>
+          <h2 v-else-if="templateModalMode === 'clone'">📋 从模板创建空间</h2>
+          <h2 v-else>📋 模板管理</h2>
+          <button class="ghost small" @click="closeTemplateModal">✕ 关闭</button>
+        </div>
+
+        <div v-if="templateModalMode === 'save'" class="template-modal-body">
+          <p class="template-modal-desc">将当前空间「{{ currentSpace?.name }}」的配置保存为模板，以便快速创建相似配置的新空间。</p>
+          <label class="template-label">模板名称</label>
+          <input v-model="templateForm.name" placeholder="输入模板名称" />
+          <label class="template-label">选择要包含的数据</label>
+          <div class="template-checkboxes">
+            <label v-for="(label, key) in TEMPLATE_ENTITY_LABELS" :key="key" class="template-checkbox">
+              <input type="checkbox" v-model="templateForm.selectedEntities" :value="key" />
+              <span>{{ label }}</span>
+              <small class="muted">({{ (getCurrentSpaceData()?.[key] || []).length }})</small>
+            </label>
+          </div>
+          <div class="template-modal-actions">
+            <button @click="saveTemplateAction">保存模板</button>
+            <button class="ghost" @click="closeTemplateModal">取消</button>
+          </div>
+        </div>
+
+        <div v-if="templateModalMode === 'clone'" class="template-modal-body">
+          <p class="template-modal-desc">选择模板并配置克隆选项，创建一个具有相同配置的新空间。所有 ID 将重新生成，不会影响原空间数据。</p>
+
+          <label class="template-label">新空间名称</label>
+          <input v-model="spaceForm.name" placeholder="输入新空间名称" />
+          <label class="template-label">空间描述（可选）</label>
+          <input v-model="spaceForm.description" placeholder="简要描述" />
+
+          <label class="template-label">选择模板</label>
+          <select v-model="cloneForm.templateId">
+            <option v-for="tmpl in templateList" :key="tmpl.id" :value="tmpl.id">{{ tmpl.name }}（来自「{{ tmpl.sourceSpaceName }}」，{{ tmpl.createdAt }}）</option>
+          </select>
+
+          <div v-if="cloneForm.templateId" class="template-info-box">
+            <p v-if="templateList.find(t => t.id === cloneForm.templateId)">
+              <strong>模板内容：</strong>{{ getTemplateEntitySummary(templateList.find(t => t.id === cloneForm.templateId)) }}
+            </p>
+          </div>
+
+          <label class="template-label">配置项复制</label>
+          <div class="template-checkboxes">
+            <label class="template-checkbox">
+              <input type="checkbox" v-model="cloneForm.copyMembers" />
+              <span>成员列表</span>
+            </label>
+            <label class="template-checkbox">
+              <input type="checkbox" v-model="cloneForm.copyGears" />
+              <span>装备配置</span>
+            </label>
+            <label class="template-checkbox">
+              <input type="checkbox" v-model="cloneForm.copyMaintenanceRecords" />
+              <span>保养记录</span>
+            </label>
+            <label class="template-checkbox">
+              <input type="checkbox" v-model="cloneForm.copyDepositRules" />
+              <span>押金规则</span>
+            </label>
+          </div>
+
+          <label class="template-label">业务流水处理</label>
+          <div class="template-checkboxes">
+            <label class="template-checkbox">
+              <input type="checkbox" v-model="cloneForm.clearBusinessFlow" />
+              <span>清空业务流水（出行、申请、交接、盘点、结算、候补、日志）</span>
+            </label>
+            <label v-if="!cloneForm.clearBusinessFlow" class="template-checkbox" style="margin-left: 20px;">
+              <input type="checkbox" v-model="cloneForm.copyExampleTrips" />
+              <span>复制示例出行</span>
+            </label>
+          </div>
+
+          <div class="template-clone-note">
+            <p>💡 克隆说明：</p>
+            <ul>
+              <li>所有 ID 将重新生成，与原空间完全独立</li>
+              <li>装备状态将重置为「可借」，损耗记录清空</li>
+              <li>押金记录重置为「待收取」，金额信息保留</li>
+              <li>出行装备状态重置为「待借」</li>
+              <li>盘点项状态重置为「待盘点」</li>
+            </ul>
+          </div>
+
+          <div class="template-modal-actions">
+            <button @click="cloneFromTemplateAction">创建空间</button>
+            <button class="ghost" @click="closeTemplateModal">取消</button>
+          </div>
+        </div>
+
+        <div v-if="templateModalMode === 'list'" class="template-modal-body">
+          <p class="template-modal-desc">管理已保存的空间模板。模板可快速复用成熟空间的成员和装备配置。</p>
+
+          <div v-if="templateList.length === 0" class="template-empty">
+            <p>暂无模板</p>
+            <p class="muted">在空间菜单中点击「存模板」将当前空间保存为模板</p>
+          </div>
+
+          <div v-else class="template-list">
+            <div v-for="tmpl in templateList" :key="tmpl.id" class="template-list-item">
+              <div class="template-list-info">
+                <strong>{{ tmpl.name }}</strong>
+                <span class="muted">来源：{{ tmpl.sourceSpaceName || '未知' }} · {{ tmpl.createdAt }}</span>
+                <p class="template-list-summary">{{ getTemplateEntitySummary(tmpl) }}</p>
+              </div>
+              <div class="template-list-actions">
+                <button class="ghost small" @click="cloneForm.templateId = tmpl.id; templateModalMode = 'clone'; spaceForm = { name: '', description: '' }">克隆到新空间</button>
+                <button class="ghost small danger" @click="deleteTemplateAction(tmpl.id)">删除</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="template-modal-actions">
+            <button class="ghost" @click="closeTemplateModal">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showHealthProfile" class="health-modal-overlay" @click.self="closeHealthProfile">
       <div class="health-modal-container">
         <EquipmentHealthProfile
@@ -4019,6 +4319,235 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
 </template>
 
 <style>
+.template-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(42, 38, 30, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+  animation: fadeIn 0.2s ease;
+}
+
+.template-modal-container {
+  width: 100%;
+  max-width: 640px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  animation: slideUp 0.3s ease;
+  margin-bottom: 40px;
+}
+
+.template-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid #ece8d8;
+}
+
+.template-modal-header h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #2f4a2c;
+}
+
+.template-modal-body {
+  padding: 20px 24px;
+}
+
+.template-modal-desc {
+  color: #666;
+  font-size: 13px;
+  margin: 0 0 16px;
+  line-height: 1.6;
+}
+
+.template-label {
+  display: block;
+  font-size: 13px;
+  color: #555;
+  font-weight: 600;
+  margin: 16px 0 8px;
+}
+
+.template-checkboxes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.template-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #444;
+  cursor: pointer;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f7f9f5;
+  transition: background 0.15s;
+}
+
+.template-checkbox:hover {
+  background: #eef2e9;
+}
+
+.template-checkbox input {
+  cursor: pointer;
+}
+
+.template-checkbox small {
+  color: #999;
+  font-size: 11px;
+}
+
+.template-info-box {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #f0f4ed;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #3a3730;
+}
+
+.template-info-box p {
+  margin: 0;
+}
+
+.template-clone-note {
+  margin-top: 16px;
+  padding: 12px;
+  background: #fffdf5;
+  border: 1px solid #f0e5c0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #6b5a2a;
+}
+
+.template-clone-note p {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+.template-clone-note ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.template-clone-note li {
+  margin-bottom: 3px;
+  line-height: 1.5;
+}
+
+.template-modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #ece8d8;
+}
+
+.template-modal-actions button {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.template-modal-actions button:not(.ghost) {
+  background: #2f4a2c;
+  color: #fff;
+}
+
+.template-modal-actions button:not(.ghost):hover {
+  background: #3d5c37;
+}
+
+.template-empty {
+  text-align: center;
+  padding: 32px 0;
+  color: #999;
+}
+
+.template-empty p:first-child {
+  font-size: 16px;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.template-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 14px 0;
+  border-bottom: 1px solid #f0ede4;
+  gap: 12px;
+}
+
+.template-list-item:last-child {
+  border-bottom: none;
+}
+
+.template-list-info {
+  flex: 1;
+}
+
+.template-list-info strong {
+  display: block;
+  font-size: 14px;
+  color: #2f4a2c;
+  margin-bottom: 2px;
+}
+
+.template-list-info .muted {
+  display: block;
+  font-size: 11px;
+}
+
+.template-list-summary {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #63705d;
+}
+
+.template-list-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  align-items: flex-start;
+}
+
+.space-menu-divider {
+  border-top: 1px solid #ece8d8;
+  margin: 8px 0;
+}
+
+.space-menu-template-section {
+  padding: 8px 0 4px;
+}
+
+.space-menu-template-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.space-menu-header-actions {
+  display: flex;
+  gap: 4px;
+}
+
 .health-modal-overlay {
   position: fixed;
   inset: 0;
