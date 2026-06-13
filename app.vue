@@ -609,6 +609,9 @@ function triggerReservationCheck() {
 }
 
 function handleReservationActivated(reservation) {
+  if (reservation.generatedRequestId) {
+    return;
+  }
   const gear = gears.value.find((g) => g.id === reservation.gearId);
   if (!gear) return;
   const conflicts = findConflictingRequests(gear.id, reservation.start, reservation.end);
@@ -1897,10 +1900,6 @@ function handleReservationPanelUpdate(newList) {
   reservations.value = newList;
 }
 
-function handleReservationPanelActivate(reservation) {
-  handleReservationActivated(reservation);
-}
-
 function handleReservationPanelCreateRequest(request) {
   if (!request) return;
   requests.value = [request, ...requests.value];
@@ -2332,7 +2331,6 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
         :current-user="currentUser"
         :health-info-map="healthInfoMap"
         @update:reservations="handleReservationPanelUpdate"
-        @activate="handleReservationPanelActivate"
         @create-request="handleReservationPanelCreateRequest"
       />
     </section>
