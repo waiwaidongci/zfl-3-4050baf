@@ -644,10 +644,6 @@ export function matchTrip(existingTrips, imported) {
 }
 
 export function matchHandoverRecord(existingRecords, imported) {
-  if (imported.requestId) {
-    const byRequest = existingRecords.find((r) => r.requestId === imported.requestId && r.type === imported.type);
-    if (byRequest) return byRequest;
-  }
   return existingRecords.find((r) =>
     r.gearName === imported.gearName &&
     r.owner === imported.owner &&
@@ -658,10 +654,6 @@ export function matchHandoverRecord(existingRecords, imported) {
 }
 
 export function matchDepositRecord(existingRecords, imported) {
-  if (imported.requestId) {
-    const byRequest = existingRecords.find((r) => r.requestId === imported.requestId);
-    if (byRequest) return byRequest;
-  }
   return existingRecords.find((r) =>
     r.gearName === imported.gearName &&
     r.owner === imported.owner &&
@@ -716,75 +708,177 @@ function updateItemWithImported(existing, imported, preserveId = true) {
 }
 
 function reconnectRelationalFields(item, idMap) {
+  if (!item || typeof item !== 'object') return item;
+
   const result = { ...item };
 
-  if (item.memberId && idMap.members?.[item.memberId]) {
+  if (typeof item.memberId === 'string' && item.memberId && idMap.members && idMap.members[item.memberId]) {
     result.memberId = idMap.members[item.memberId];
   }
-  if (item.gearId && idMap.gears?.[item.gearId]) {
+  if (typeof item.gearId === 'string' && item.gearId && idMap.gears && idMap.gears[item.gearId]) {
     result.gearId = idMap.gears[item.gearId];
   }
-  if (item.requestId && idMap.requests?.[item.requestId]) {
+  if (typeof item.requestId === 'string' && item.requestId && idMap.requests && idMap.requests[item.requestId]) {
     result.requestId = idMap.requests[item.requestId];
   }
-  if (item.tripId && idMap.trips?.[item.tripId]) {
+  if (typeof item.tripId === 'string' && item.tripId && idMap.trips && idMap.trips[item.tripId]) {
     result.tripId = idMap.trips[item.tripId];
   }
-  if (item.fromReservationId && idMap.reservations?.[item.fromReservationId]) {
+  if (typeof item.fromReservationId === 'string' && item.fromReservationId && idMap.reservations && idMap.reservations[item.fromReservationId]) {
     result.fromReservationId = idMap.reservations[item.fromReservationId];
   }
-  if (item.generatedRequestId && idMap.requests?.[item.generatedRequestId]) {
+  if (typeof item.generatedRequestId === 'string' && item.generatedRequestId && idMap.requests && idMap.requests[item.generatedRequestId]) {
     result.generatedRequestId = idMap.requests[item.generatedRequestId];
   }
+  if (typeof item.requestId === 'string' && item.requestId && idMap.requests && idMap.requests[item.requestId]) {
+    result.requestId = idMap.requests[item.requestId];
+  }
+  if (typeof item.inventoryId === 'string' && item.inventoryId && idMap.inventoryLists && idMap.inventoryLists[item.inventoryId]) {
+    result.inventoryId = idMap.inventoryLists[item.inventoryId];
+  }
 
-  if (item.members && Array.isArray(item.members)) {
+  if (Array.isArray(item.members)) {
     result.members = item.members.map((m) => {
       if (typeof m === 'string') return m;
-      if (m.memberId && idMap.members?.[m.memberId]) {
-        return { ...m, memberId: idMap.members[m.memberId] };
+      if (!m || typeof m !== 'object') return m;
+      const nm = { ...m };
+      if (typeof m.memberId === 'string' && m.memberId && idMap.members && idMap.members[m.memberId]) {
+        nm.memberId = idMap.members[m.memberId];
       }
-      return m;
+      if (Array.isArray(m.depositItems)) {
+        nm.depositItems = m.depositItems.map((d) => {
+          if (!d || typeof d !== 'object') return d;
+          const nd = { ...d };
+          if (typeof d.depositId === 'string' && d.depositId && idMap.depositRecords && idMap.depositRecords[d.depositId]) {
+            nd.depositId = idMap.depositRecords[d.depositId];
+          }
+          if (typeof d.inventoryId === 'string' && d.inventoryId && idMap.inventoryLists && idMap.inventoryLists[d.inventoryId]) {
+            nd.inventoryId = idMap.inventoryLists[d.inventoryId];
+          }
+          return nd;
+        });
+      }
+      return nm;
     });
   }
 
-  if (item.gears && Array.isArray(item.gears)) {
+  if (Array.isArray(item.gears)) {
     result.gears = item.gears.map((g) => {
-      if (g.gearId && idMap.gears?.[g.gearId]) {
-        return { ...g, gearId: idMap.gears[g.gearId] };
+      if (!g || typeof g !== 'object') return g;
+      const ng = { ...g };
+      if (typeof g.gearId === 'string' && g.gearId && idMap.gears && idMap.gears[g.gearId]) {
+        ng.gearId = idMap.gears[g.gearId];
       }
-      return g;
+      return ng;
     });
   }
 
-  if (item.items && Array.isArray(item.items)) {
+  if (Array.isArray(item.items)) {
     result.items = item.items.map((it) => reconnectRelationalFields(it, idMap));
+  }
+
+  if (Array.isArray(item.abnormalActions)) {
+    result.abnormalActions = item.abnormalActions.map((a) => {
+      if (!a || typeof a !== 'object') return a;
+      const na = { ...a };
+      if (typeof a.relatedRecordId === 'string' && a.relatedRecordId) {
+        if (idMap.handoverRecords && idMap.handoverRecords[a.relatedRecordId]) {
+          na.relatedRecordId = idMap.handoverRecords[a.relatedRecordId];
+        } else if (idMap.depositRecords && idMap.depositRecords[a.relatedRecordId]) {
+          na.relatedRecordId = idMap.depositRecords[a.relatedRecordId];
+        }
+      }
+      return na;
+    });
+  }
+
+  if (Array.isArray(item.extraExpenses)) {
+    result.extraExpenses = item.extraExpenses.map((e) => (e && typeof e === 'object' ? { ...e } : e));
   }
 
   return result;
 }
 
+function deepCompareForEquivalence(a, b, ignoredKeys = ['id', 'createdAt', 'updatedAt']) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+
+  const keysA = Object.keys(a).filter((k) => !ignoredKeys.includes(k));
+  const keysB = Object.keys(b).filter((k) => !ignoredKeys.includes(k));
+  if (keysA.length !== keysB.length) {
+    const setA = new Set(keysA);
+    const setB = new Set(keysB);
+    for (const k of setA) if (!setB.has(k)) {
+      const av = a[k];
+      if (av !== undefined && av !== null && av !== '' && !(Array.isArray(av) && av.length === 0)) return false;
+    }
+    for (const k of setB) if (!setA.has(k)) {
+      const bv = b[k];
+      if (bv !== undefined && bv !== null && bv !== '' && !(Array.isArray(bv) && bv.length === 0)) return false;
+    }
+  }
+
+  for (const k of keysA) {
+    if (ignoredKeys.includes(k)) continue;
+    const av = a[k];
+    const bv = b[k];
+
+    if (Array.isArray(av) && Array.isArray(bv)) {
+      if (av.length !== bv.length) return false;
+      for (let i = 0; i < av.length; i++) {
+        if (!deepCompareForEquivalence(av[i], bv[i], ignoredKeys)) return false;
+      }
+    } else if (av && bv && typeof av === 'object' && typeof bv === 'object') {
+      if (!deepCompareForEquivalence(av, bv, ignoredKeys)) return false;
+    } else {
+      if (av !== bv) {
+        if ((av === undefined || av === '' || av === null) &&
+            (bv === undefined || bv === '' || bv === null)) continue;
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+const MERGE_PROCESS_ORDER = [
+  'members',
+  'gears',
+  'maintenanceRecords',
+  'trips',
+  'requests',
+  'reservations',
+  'handoverRecords',
+  'depositRecords',
+  'inventoryLists',
+  'settlementRecords'
+];
+
 export function analyzeMergeData(currentData, importedData) {
+  const safeCurrent = currentData && typeof currentData === 'object' ? currentData : {};
+  const safeImported = importedData && typeof importedData === 'object' ? importedData : {};
+
   const analysis = {};
   const idMap = {
-    members: {},
-    gears: {},
-    requests: {},
-    maintenanceRecords: {},
-    trips: {},
-    handoverRecords: {},
-    depositRecords: {},
-    inventoryLists: {},
-    settlementRecords: {},
-    reservations: {}
+    members: Object.create(null),
+    gears: Object.create(null),
+    requests: Object.create(null),
+    maintenanceRecords: Object.create(null),
+    trips: Object.create(null),
+    handoverRecords: Object.create(null),
+    depositRecords: Object.create(null),
+    inventoryLists: Object.create(null),
+    settlementRecords: Object.create(null),
+    reservations: Object.create(null)
   };
 
-  DATA_ENTITIES.forEach((entityKey) => {
-    if (importedData[entityKey] === undefined) {
+  MERGE_PROCESS_ORDER.forEach((entityKey) => {
+    if (safeImported[entityKey] === undefined) {
       return;
     }
 
-    const existing = currentData[entityKey] || [];
-    const importedList = importedData[entityKey] || [];
+    const existing = Array.isArray(safeCurrent[entityKey]) ? safeCurrent[entityKey] : [];
+    const importedList = Array.isArray(safeImported[entityKey]) ? safeImported[entityKey] : [];
     const matcher = MATCHERS[entityKey];
 
     const stats = {
@@ -801,36 +895,69 @@ export function analyzeMergeData(currentData, importedData) {
       unmatchedItems: []
     };
 
-    importedList.forEach((item) => {
-      const matched = matcher(existing, item);
+    for (let i = 0; i < importedList.length; i++) {
+      const item = importedList[i];
+      if (!item || typeof item !== 'object') {
+        stats.unmatched++;
+        stats.unmatchedItems.push(item);
+        continue;
+      }
 
-      if (matched) {
-        const isIdentical = JSON.stringify(matched) === JSON.stringify(item);
+      const importId = item.id;
+      const matched = typeof matcher === 'function' ? matcher(existing, item) : null;
+
+      if (matched && matched.id) {
+        const isIdentical = deepCompareForEquivalence(item, matched);
+
+        if (importId && typeof importId === 'string') {
+          idMap[entityKey][importId] = matched.id;
+        }
+
         if (isIdentical) {
           stats.skipped++;
           stats.skippedItems.push(item);
-          idMap[entityKey][item.id] = matched.id;
         } else {
           stats.updated++;
-          stats.updatedItems.push({ old: matched, new: item });
-          idMap[entityKey][item.id] = matched.id;
+          stats.updatedItems.push({ old: { ...matched }, new: item });
         }
       } else {
+        let isUnmatched = false;
+
         if (entityKey === 'requests' || entityKey === 'handoverRecords' ||
             entityKey === 'depositRecords' || entityKey === 'reservations') {
-          const gearOk = item.gearName && item.owner;
-          const borrowerOk = item.borrower;
+          const gearOk = item.gearName && String(item.gearName).trim() && item.owner !== undefined && String(item.owner).trim();
+          const borrowerOk = item.borrower !== undefined && String(item.borrower).trim();
           if (!gearOk || !borrowerOk) {
-            stats.unmatched++;
-            stats.unmatchedItems.push(item);
-            return;
+            isUnmatched = true;
           }
         }
+
+        if (entityKey === 'settlementRecords') {
+          if (!item.name || !String(item.name).trim()) {
+            isUnmatched = true;
+          }
+        }
+
+        if (entityKey === 'inventoryLists') {
+          if (!item.name || !String(item.name).trim()) {
+            isUnmatched = true;
+          }
+        }
+
+        if (isUnmatched) {
+          stats.unmatched++;
+          stats.unmatchedItems.push(item);
+          continue;
+        }
+
         stats.added++;
         stats.addedItems.push(item);
-        idMap[entityKey][item.id] = item.id;
+
+        if (importId && typeof importId === 'string') {
+          idMap[entityKey][importId] = importId;
+        }
       }
-    });
+    }
 
     analysis[entityKey] = stats;
   });
@@ -842,48 +969,91 @@ export function analyzeMergeData(currentData, importedData) {
     totalUnmatched: 0
   };
 
-  Object.values(analysis).forEach((stats) => {
-    summary.totalAdded += stats.added;
-    summary.totalUpdated += stats.updated;
-    summary.totalSkipped += stats.skipped;
-    summary.totalUnmatched += stats.unmatched;
-  });
+  for (const k of Object.keys(analysis)) {
+    const s = analysis[k];
+    summary.totalAdded += s.added || 0;
+    summary.totalUpdated += s.updated || 0;
+    summary.totalSkipped += s.skipped || 0;
+    summary.totalUnmatched += s.unmatched || 0;
+  }
 
   return { analysis, summary, idMap };
 }
 
 export function performMerge(currentData, importedData, mergeAnalysis) {
-  const result = { ...currentData };
-  const { idMap } = mergeAnalysis;
+  if (!currentData || typeof currentData !== 'object') {
+    currentData = {};
+  }
+  if (!importedData || typeof importedData !== 'object') {
+    return { ...currentData };
+  }
+  if (!mergeAnalysis || typeof mergeAnalysis !== 'object') {
+    return { ...currentData };
+  }
 
-  DATA_ENTITIES.forEach((entityKey) => {
+  const result = { ...currentData };
+  const { idMap, analysis } = mergeAnalysis;
+
+  if (!analysis || typeof analysis !== 'object') {
+    return result;
+  }
+  if (!idMap || typeof idMap !== 'object') {
+    return result;
+  }
+
+  for (let oi = 0; oi < MERGE_PROCESS_ORDER.length; oi++) {
+    const entityKey = MERGE_PROCESS_ORDER[oi];
+
     if (importedData[entityKey] === undefined) {
-      return;
+      continue;
     }
 
-    const existing = [...(currentData[entityKey] || [])];
-    const importedList = importedData[entityKey] || [];
-    const analysis = mergeAnalysis.analysis[entityKey];
-    const matcher = MATCHERS[entityKey];
+    const entityAnalysis = analysis[entityKey];
+    if (!entityAnalysis || typeof entityAnalysis !== 'object') {
+      continue;
+    }
 
-    const merged = [...existing];
+    const existingArr = Array.isArray(currentData[entityKey]) ? currentData[entityKey] : [];
+    const merged = [...existingArr];
 
-    analysis.addedItems.forEach((item) => {
-      const reconnected = reconnectRelationalFields(item, idMap);
-      merged.push(reconnected);
-    });
+    if (Array.isArray(entityAnalysis.addedItems) && entityAnalysis.addedItems.length > 0) {
+      for (let ai = 0; ai < entityAnalysis.addedItems.length; ai++) {
+        const rawItem = entityAnalysis.addedItems[ai];
+        if (!rawItem || typeof rawItem !== 'object') continue;
+        const reconnected = reconnectRelationalFields({ ...rawItem }, idMap);
+        merged.push(reconnected);
+      }
+    }
 
-    analysis.updatedItems.forEach(({ old: oldItem, new: newItem }) => {
-      const idx = merged.findIndex((m) => m.id === oldItem.id);
-      if (idx !== -1) {
-        const updated = updateItemWithImported(oldItem, newItem, true);
-        const reconnected = reconnectRelationalFields(updated, idMap);
+    if (Array.isArray(entityAnalysis.updatedItems) && entityAnalysis.updatedItems.length > 0) {
+      for (let ui = 0; ui < entityAnalysis.updatedItems.length; ui++) {
+        const updatePair = entityAnalysis.updatedItems[ui];
+        if (!updatePair || typeof updatePair !== 'object') continue;
+        const oldItem = updatePair.old;
+        const newItem = updatePair.new;
+        if (!oldItem || !newItem || typeof oldItem !== 'object' || typeof newItem !== 'object') continue;
+        if (!oldItem.id) continue;
+
+        const idx = merged.findIndex((m) => m && m.id === oldItem.id);
+        if (idx === -1) continue;
+
+        const mergedWithCurrent = { ...merged[idx] };
+        Object.keys(newItem).forEach((k) => {
+          if (k === 'id') return;
+          const nv = newItem[k];
+          if (nv !== undefined) {
+            mergedWithCurrent[k] = nv;
+          }
+        });
+        mergedWithCurrent.id = oldItem.id;
+
+        const reconnected = reconnectRelationalFields(mergedWithCurrent, idMap);
         merged[idx] = reconnected;
       }
-    });
+    }
 
     result[entityKey] = merged;
-  });
+  }
 
   return result;
 }
@@ -891,11 +1061,20 @@ export function performMerge(currentData, importedData, mergeAnalysis) {
 export function validateAndNormalizeForMerge(rawData, currentData) {
   const normalizeResult = validateAndNormalizeImportData(rawData);
 
-  if (!normalizeResult.valid) {
-    return normalizeResult;
+  if (!normalizeResult || !normalizeResult.valid) {
+    return normalizeResult || {
+      valid: false,
+      errors: ['数据格式无效'],
+      warnings: [],
+      data: null,
+      summary: { totalWarnings: 0, hasLegacyFormat: false }
+    };
   }
 
-  const mergeAnalysis = analyzeMergeData(currentData || {}, normalizeResult.data || {});
+  const safeCurrent = currentData && typeof currentData === 'object' ? currentData : {};
+  const safeData = normalizeResult.data && typeof normalizeResult.data === 'object' ? normalizeResult.data : {};
+
+  const mergeAnalysis = analyzeMergeData(safeCurrent, safeData);
 
   return {
     ...normalizeResult,

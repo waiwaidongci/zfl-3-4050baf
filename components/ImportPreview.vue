@@ -2,17 +2,17 @@
   <div class="import-preview">
     <div class="preview-header">
       <h3>数据预览</h3>
-      <span v-if="previewResult.summary.hasLegacyFormat" class="legacy-badge">旧版格式已兼容</span>
+      <span v-if="safeSummary.hasLegacyFormat" class="legacy-badge">旧版格式已兼容</span>
     </div>
 
-    <div v-if="previewResult.errors.length > 0" class="error-section">
+    <div v-if="safeErrors.length > 0" class="error-section">
       <h4 class="error-title">❌ 导入错误</h4>
       <ul class="error-list">
-        <li v-for="(err, idx) in previewResult.errors" :key="idx" class="error-item">{{ err }}</li>
+        <li v-for="(err, idx) in safeErrors" :key="idx" class="error-item">{{ err }}</li>
       </ul>
     </div>
 
-    <div v-if="previewResult.valid" class="mode-section">
+    <div v-if="isValid && canMerge" class="mode-section">
       <h4>📋 导入模式</h4>
       <div class="mode-options">
         <label class="mode-option" :class="{ active: importMode === 'overwrite' }">
@@ -32,45 +32,47 @@
       </div>
     </div>
 
-    <div v-if="importMode === 'merge' && previewResult.mergeAnalysis" class="merge-summary-section">
+    <div v-if="importMode === 'merge' && mergeStats" class="merge-summary-section">
       <h4>🔄 合并预览统计</h4>
       <div class="merge-summary-grid">
         <div class="merge-stat-card added">
-          <span class="merge-stat-count">{{ previewResult.mergeAnalysis.summary.totalAdded }}</span>
+          <span class="merge-stat-count">{{ mergeStats.totalAdded }}</span>
           <span class="merge-stat-label">新增</span>
         </div>
         <div class="merge-stat-card updated">
-          <span class="merge-stat-count">{{ previewResult.mergeAnalysis.summary.totalUpdated }}</span>
+          <span class="merge-stat-count">{{ mergeStats.totalUpdated }}</span>
           <span class="merge-stat-label">更新</span>
         </div>
         <div class="merge-stat-card skipped">
-          <span class="merge-stat-count">{{ previewResult.mergeAnalysis.summary.totalSkipped }}</span>
+          <span class="merge-stat-count">{{ mergeStats.totalSkipped }}</span>
           <span class="merge-stat-label">跳过</span>
         </div>
         <div class="merge-stat-card unmatched">
-          <span class="merge-stat-count">{{ previewResult.mergeAnalysis.summary.totalUnmatched }}</span>
+          <span class="merge-stat-count">{{ mergeStats.totalUnmatched }}</span>
           <span class="merge-stat-label">无法匹配</span>
         </div>
       </div>
 
       <div class="merge-details">
-        <div v-for="entity in entities" :key="entity.key" class="merge-entity-row" v-if="isEntityIncluded(entity.key)">
-          <span class="merge-entity-label">{{ entity.label }}</span>
-          <div class="merge-entity-stats">
-            <span class="stat-badge added">+{{ getMergeStat(entity.key, 'added') }}</span>
-            <span class="stat-badge updated">~{{ getMergeStat(entity.key, 'updated') }}</span>
-            <span class="stat-badge skipped">={{ getMergeStat(entity.key, 'skipped') }}</span>
-            <span class="stat-badge unmatched">?{{ getMergeStat(entity.key, 'unmatched') }}</span>
+        <template v-for="entity in includedMergeEntities" :key="entity.key">
+          <div class="merge-entity-row">
+            <span class="merge-entity-label">{{ entity.label }}</span>
+            <div class="merge-entity-stats">
+              <span class="stat-badge added">+{{ entity.added }}</span>
+              <span class="stat-badge updated">~{{ entity.updated }}</span>
+              <span class="stat-badge skipped">={{ entity.skipped }}</span>
+              <span v-if="entity.unmatched > 0" class="stat-badge unmatched">?{{ entity.unmatched }}</span>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
 
-      <p v-if="previewResult.mergeAnalysis.summary.totalUnmatched > 0" class="unmatched-hint">
-        ⚠️ 有 {{ previewResult.mergeAnalysis.summary.totalUnmatched }} 条记录无法匹配到有效关联（如缺失装备或成员信息），将不会被导入
+      <p v-if="mergeStats.totalUnmatched > 0" class="unmatched-hint">
+        ⚠️ 有 {{ mergeStats.totalUnmatched }} 条记录无法匹配到有效关联（如缺失装备或成员信息），将不会被导入
       </p>
     </div>
 
-    <div class="summary-section">
+    <div v-if="isValid" class="summary-section">
       <h4>📊 数据摘要</h4>
       <div class="summary-grid">
         <div v-for="entity in entities" :key="entity.key" class="summary-card" :class="{ 'not-included': !isEntityIncluded(entity.key) }">
@@ -83,17 +85,17 @@
       </p>
     </div>
 
-    <div v-if="previewResult.warnings.length > 0" class="warning-section">
+    <div v-if="safeWarnings.length > 0" class="warning-section">
       <div class="warning-header" @click="showWarnings = !showWarnings">
-        <h4>⚠️ 异常项 ({{ previewResult.warnings.length }})</h4>
+        <h4>⚠️ 异常项 ({{ safeWarnings.length }})</h4>
         <span class="toggle-icon">{{ showWarnings ? '收起' : '展开' }}</span>
       </div>
       <div v-if="showWarnings" class="warning-list">
         <div v-for="(warn, idx) in displayedWarnings" :key="idx" class="warning-item">{{ warn }}</div>
-        <div v-if="previewResult.warnings.length > 5 && !showAllWarnings" class="show-more" @click="showAllWarnings = true">
-          还有 {{ previewResult.warnings.length - 5 }} 条，点击展开全部
+        <div v-if="safeWarnings.length > 5 && !showAllWarnings" class="show-more" @click="showAllWarnings = true">
+          还有 {{ safeWarnings.length - 5 }} 条，点击展开全部
         </div>
-        <div v-if="showAllWarnings && previewResult.warnings.length > 5" class="show-more" @click="showAllWarnings = false">
+        <div v-if="showAllWarnings && safeWarnings.length > 5" class="show-more" @click="showAllWarnings = false">
           收起
         </div>
       </div>
@@ -103,7 +105,7 @@
       <button class="btn-cancel" @click="$emit('cancel')">取消</button>
       <button
         class="btn-confirm"
-        :disabled="!previewResult.valid"
+        :disabled="!isValid"
         @click="handleConfirm"
       >
         确认{{ importMode === 'overwrite' ? '覆盖' : '合并' }}导入
@@ -134,7 +136,41 @@ const showAllWarnings = ref(false);
 const importMode = ref(props.defaultMode);
 
 watch(() => props.defaultMode, (val) => {
-  importMode.value = val;
+  if (val) {
+    importMode.value = val;
+  }
+}, { immediate: false });
+
+const isValid = computed(() => !!props.previewResult?.valid);
+const canMerge = computed(() => !!props.previewResult?.mergeAnalysis);
+
+const safeSummary = computed(() => {
+  const s = props.previewResult?.summary;
+  if (!s || typeof s !== 'object') {
+    return { totalWarnings: 0, hasLegacyFormat: false };
+  }
+  return s;
+});
+
+const safeErrors = computed(() => {
+  const e = props.previewResult?.errors;
+  return Array.isArray(e) ? e : [];
+});
+
+const safeWarnings = computed(() => {
+  const w = props.previewResult?.warnings;
+  return Array.isArray(w) ? w : [];
+});
+
+const mergeStats = computed(() => {
+  const m = props.previewResult?.mergeAnalysis?.summary;
+  if (!m || typeof m !== 'object') return null;
+  return {
+    totalAdded: Number(m.totalAdded) || 0,
+    totalUpdated: Number(m.totalUpdated) || 0,
+    totalSkipped: Number(m.totalSkipped) || 0,
+    totalUnmatched: Number(m.totalUnmatched) || 0
+  };
 });
 
 const entities = computed(() => {
@@ -145,36 +181,55 @@ const entities = computed(() => {
 });
 
 function isEntityIncluded(entityKey) {
-  return props.previewResult.summary?.[entityKey] !== undefined;
+  return safeSummary.value?.[entityKey] !== undefined;
 }
 
 function getEntityDisplay(entityKey) {
-  const count = props.previewResult.summary?.[entityKey];
+  const count = safeSummary.value?.[entityKey];
   return count !== undefined ? count : '—';
 }
 
-function getMergeStat(entityKey, statType) {
-  const analysis = props.previewResult.mergeAnalysis?.analysis?.[entityKey];
-  if (!analysis) return 0;
-  return analysis[statType] || 0;
-}
+const includedMergeEntities = computed(() => {
+  const analysis = props.previewResult?.mergeAnalysis?.analysis;
+  if (!analysis || typeof analysis !== 'object') return [];
+  const result = [];
+  for (let i = 0; i < DATA_ENTITIES.length; i++) {
+    const key = DATA_ENTITIES[i];
+    if (!isEntityIncluded(key)) continue;
+    const a = analysis[key];
+    if (!a || typeof a !== 'object') continue;
+    result.push({
+      key,
+      label: ENTITY_LABELS[key] || key,
+      added: Number(a.added) || 0,
+      updated: Number(a.updated) || 0,
+      skipped: Number(a.skipped) || 0,
+      unmatched: Number(a.unmatched) || 0
+    });
+  }
+  return result;
+});
 
 const hasExcludedEntities = computed(() => {
   return DATA_ENTITIES.some((key) => !isEntityIncluded(key));
 });
 
 const displayedWarnings = computed(() => {
+  const warnings = safeWarnings.value;
   if (showAllWarnings.value) {
-    return props.previewResult.warnings;
+    return warnings;
   }
-  return props.previewResult.warnings.slice(0, 5);
+  return warnings.slice(0, 5);
 });
 
 function handleConfirm() {
+  if (!isValid.value || !props.previewResult?.data) return;
   emit('confirm', {
     data: props.previewResult.data,
     mode: importMode.value,
-    mergeAnalysis: importMode.value === 'merge' ? props.previewResult.mergeAnalysis : null
+    mergeAnalysis: (importMode.value === 'merge' && canMerge.value)
+      ? props.previewResult.mergeAnalysis
+      : null
   });
 }
 </script>
