@@ -855,6 +855,8 @@ const reservationHelper = useReservation({
   healthInfoMap: healthInfoMap
 });
 
+const pendingReviewNotification = ref(null);
+
 function triggerReservationCheck() {
   const beforeReservations = JSON.parse(JSON.stringify(reservations.value));
   const result = reservationHelper.checkAndActivate();
@@ -891,6 +893,43 @@ function triggerReservationCheck() {
       }
     }
   }
+
+  const reviewItems = reservationHelper.analyzeForReview();
+  if (reviewItems && reviewItems.length > 0) {
+    const canActivateCount = reviewItems.filter(i => i.canActivate).length;
+    const hasWarningCount = reviewItems.filter(i => i.warnings.length > 0 && !i.activationBlockers.length).length;
+    const blockedCount = reviewItems.filter(i => i.activationBlockers.length > 0).length;
+
+    pendingReviewNotification.value = {
+      total: reviewItems.length,
+      canActivate: canActivateCount,
+      hasWarning: hasWarningCount,
+      blocked: blockedCount,
+      timestamp: Date.now()
+    };
+
+    logEvent({
+      entityType: 'reservation',
+      entityId: 'review_detection',
+      entityName: '候补转正审核',
+      action: 'review_items_detected',
+      beforeState: null,
+      afterState: pendingReviewNotification.value,
+      sourcePage: tab.value || '',
+      notes: `检测到 ${reviewItems.length} 项候补可转正审核`
+    });
+  } else {
+    pendingReviewNotification.value = null;
+  }
+}
+
+function dismissReviewNotification() {
+  pendingReviewNotification.value = null;
+}
+
+function navigateToReview() {
+  tab.value = '预约排程';
+  pendingReviewNotification.value = null;
 }
 
 function handleReservationActivated(reservation) {
@@ -3243,13 +3282,38 @@ function addReservationFromShortcut() {
 function getReservationsForCell(rowKey, rowType, dateStr) {
   const date = new Date(dateStr);
   return reservations.value.filter((res) => {
-    if (res.status !== '候补中' && res.status !== '已转正') return false;
+    if (res.status !== '候补中' && res.status !== '已转正' && res.status !== '审核跳过') return false;
     if (rowType === 'gear' && res.gearId !== rowKey) return false;
     if (rowType === 'member' && res.borrower !== rowKey) return false;
     const resStart = new Date(res.start);
     const resEnd = new Date(res.end);
     return date >= resStart && date <= resEnd;
   });
+}
+
+function getCalendarCellHighlight(rowKey, rowType, dateStr) {
+  const items = reservations.value.filter((res) => {
+    if (!res.generatedRequestId && (res.status === '候补中' || res.status === '审核跳过')) {
+      if (rowType === 'gear' && res.gearId !== rowKey) return false;
+      if (rowType === 'member' && res.borrower !== rowKey) return false;
+      const resStart = new Date(res.start);
+      const resEnd = new Date(res.end);
+      return dateStr >= resStart && dateStr <= resEnd;
+    }
+    return false;
+  });
+
+  if (items.length === 0) return null;
+
+  const hasSkipped = items.some(i => i.status === '审核跳过');
+  const hasHighPriority = items.some(i => i.priorityScore >= 80);
+
+  return {
+    count: items.length,
+    hasSkipped,
+    hasHighPriority,
+    maxPriority: Math.max(...items.map(i => i.priorityScore))
+  };
 }
 </script>
 
@@ -3264,6 +3328,30 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       <div class="warning-actions">
         <button class="ghost small" @click="resetSpaceData(currentSpaceId)">重置当前空间</button>
         <button class="ghost small" @click="dismissDataErrorWarning">关闭</button>
+      </div>
+    </div>
+
+    <div v-if="pendingReviewNotification" class="review-notification">
+      <div class="review-notification-content">
+        <span class="review-notification-icon">🔍</span>
+        <div class="review-notification-info">
+          <strong>有 {{ pendingReviewNotification.total }} 项候补可转正审核</strong>
+          <div class="review-notification-details">
+            <span v-if="pendingReviewNotification.canActivate > 0" class="detail-tag ok">
+              {{ pendingReviewNotification.canActivate }} 项可直接转正
+            </span>
+            <span v-if="pendingReviewNotification.hasWarning > 0" class="detail-tag warning">
+              {{ pendingReviewNotification.hasWarning }} 项存在警告
+            </span>
+            <span v-if="pendingReviewNotification.blocked > 0" class="detail-tag blocked">
+              {{ pendingReviewNotification.blocked }} 项被阻止
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="review-notification-actions">
+        <button class="primary small" @click="navigateToReview">前往审核</button>
+        <button class="ghost small" @click="dismissReviewNotification">关闭</button>
       </div>
     </div>
 
@@ -3790,7 +3878,24 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
           <div class="calendar-row-label">
             <strong>{{ row.label }}</strong>
           </div>
-          <div v-for="date in weekDates" :key="date" :class="['calendar-cell', { today: date === iso(0) }]">
+          <div
+            v-for="date in weekDates"
+            :key="date"
+            :class="['calendar-cell', {
+              today: date === iso(0),
+              'has-review-highlight': getCalendarCellHighlight(row.key, row.type, date)
+            }]"
+          >
+            <div
+              v-if="getCalendarCellHighlight(row.key, row.type, date)"
+              :class="['review-highlight-indicator', {
+                'high-priority': getCalendarCellHighlight(row.key, row.type, date).hasHighPriority,
+                'has-skipped': getCalendarCellHighlight(row.key, row.type, date).hasSkipped
+              }]"
+              :title="`${getCalendarCellHighlight(row.key, row.type, date).count} 项候补待审核，最高优先级 ${getCalendarCellHighlight(row.key, row.type, date).maxPriority}`"
+            >
+              {{ getCalendarCellHighlight(row.key, row.type, date).count }}
+            </div>
             <div class="cell-requests">
               <div
                 v-for="req in getRequestsForCell(row.key, row.type, date)"
@@ -3808,7 +3913,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
                 :title="`候补 | ${res.gearName} | ${res.borrower} | ${res.start}~${res.end} | ${res.status}`"
               >
                 <div class="cal-req-name">{{ row.type === 'gear' ? res.borrower : res.gearName }}</div>
-                <div class="cal-req-status">候补</div>
+                <div class="cal-req-status">{{ res.status === '审核跳过' ? '审核跳过' : '候补' }}</div>
               </div>
             </div>
           </div>
@@ -3820,6 +3925,8 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
         <span class="legend-item"><span class="legend-dot 已同意"></span>已同意</span>
         <span class="legend-item"><span class="legend-dot 借出中"></span>借出中</span>
         <span class="legend-item"><span class="legend-dot reservation"></span>候补预约</span>
+        <span class="legend-item"><span class="legend-dot 审核跳过"></span>审核跳过</span>
+        <span class="legend-item"><span class="legend-dot review-highlight"></span>待审核高亮</span>
       </div>
     </section>
 
@@ -5016,5 +5123,192 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
   border-radius: 10px;
   font-size: 11px;
   font-weight: 600;
+}
+
+.review-notification {
+  background: linear-gradient(135deg, #2f4a2c 0%, #3d6b38 100%);
+  color: #fff;
+  padding: 14px 20px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.review-notification-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.review-notification-icon {
+  font-size: 24px;
+}
+
+.review-notification-info strong {
+  font-size: 15px;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.review-notification-details {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detail-tag {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.detail-tag.ok {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.detail-tag.warning {
+  background: rgba(197, 138, 43, 0.4);
+}
+
+.detail-tag.blocked {
+  background: rgba(176, 42, 42, 0.4);
+}
+
+.review-notification-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.review-notification-actions .primary {
+  background: #fff;
+  color: #2f4a2c;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.review-notification-actions .primary:hover {
+  background: #f0f4e8;
+  transform: translateY(-1px);
+}
+
+.review-notification-actions .ghost {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.review-notification-actions .ghost:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.primary.small {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.ghost.small {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.calendar-cell.has-review-highlight {
+  position: relative;
+  background: linear-gradient(135deg, #f9fbf6 0%, #f0f4e8 100%);
+}
+
+.review-highlight-indicator {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #c58a2b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  animation: pulse 2s infinite;
+}
+
+.review-highlight-indicator.high-priority {
+  background: #b02a2a;
+}
+
+.review-highlight-indicator.has-skipped {
+  background: #8a6d1b;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+  }
+}
+
+.cal-request.reservation.审核跳过 {
+  background: #fdf8e8;
+  border-left: 3px solid #8a6d1b;
+}
+
+.cal-request.reservation.审核跳过 .cal-req-status {
+  color: #8a6d1b;
+}
+
+.legend-dot.审核跳过 {
+  background: #8a6d1b;
+  border: none;
+  opacity: 0.8;
+}
+
+.legend-dot.review-highlight {
+  background: #c58a2b;
+  border: none;
+  position: relative;
+}
+
+.legend-dot.review-highlight::after {
+  content: '!';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
 }
 </style>

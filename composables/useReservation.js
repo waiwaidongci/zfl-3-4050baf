@@ -1,4 +1,4 @@
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
   createReservation,
   calculatePriorityScore,
@@ -11,7 +11,14 @@ import {
   getReservationStats,
   RESERVATION_STATUSES,
   validateActivation,
-  createRequestFromReservation
+  createRequestFromReservation,
+  analyzeAllActivatableReservations,
+  skipReservation,
+  unskipReservation,
+  adjustReservationDates,
+  batchActivateReservations,
+  analyzeConflicts,
+  findAlternativeDates
 } from '../utils/reservationTransform.js';
 
 function resolve(val) {
@@ -189,16 +196,232 @@ export function useReservation({ reservations, gears, requests, handovers, membe
     };
   }
 
+  const reviewMode = ref(false);
+  const reviewItems = ref([]);
+
+  function getReviewContext() {
+    return {
+      requests: requestList.value,
+      gears: gearList.value,
+      handovers: handoverList.value,
+      healthInfoMap: healthMap.value
+    };
+  }
+
+  function analyzeForReview() {
+    const expired = expireOutdatedReservations(reservationList.value);
+    const withPriorities = recalcAllPriorities(expired, getContextForPriority());
+    const withPositions = computeQueuePositions(withPriorities);
+    const context = getReviewContext();
+    reviewItems.value = analyzeAllActivatableReservations(withPositions, context);
+    return reviewItems.value;
+  }
+
+  function toggleReviewMode() {
+    reviewMode.value = !reviewMode.value;
+    if (reviewMode.value) {
+      analyzeForReview();
+    }
+    return reviewMode.value;
+  }
+
+  function toggleSelectReviewItem(itemId) {
+    reviewItems.value = reviewItems.value.map((item) =>
+      item.id === itemId ? { ...item, selected: !item.selected } : item
+    );
+  }
+
+  function selectAllReviewItems(canActivateOnly = true) {
+    reviewItems.value = reviewItems.value.map((item) => ({
+      ...item,
+      selected: canActivateOnly ? item.canActivate : true
+    }));
+  }
+
+  function clearSelection() {
+    reviewItems.value = reviewItems.value.map((item) => ({
+      ...item,
+      selected: false
+    }));
+  }
+
+  function setItemAction(itemId, action, notes = '') {
+    reviewItems.value = reviewItems.value.map((item) =>
+      item.id === itemId ? { ...item, action, reviewNotes: notes } : item
+    );
+  }
+
+  function setItemAdjustedDates(itemId, start, end) {
+    reviewItems.value = reviewItems.value.map((item) =>
+      item.id === itemId
+        ? {
+            ...item,
+            adjustedStart: start,
+            adjustedEnd: end,
+            action: 'adjust'
+          }
+        : item
+    );
+  }
+
+  function doSkip(reservationId, notes = '') {
+    const reservation = reservationList.value.find((r) => r.id === reservationId);
+    if (!reservation) return null;
+    return skipReservation(reservation, notes);
+  }
+
+  function doUnskip(reservationId) {
+    const reservation = reservationList.value.find((r) => r.id === reservationId);
+    if (!reservation) return null;
+    return unskipReservation(reservation);
+  }
+
+  function doAdjustDates(reservationId, newStart, newEnd) {
+    const reservation = reservationList.value.find((r) => r.id === reservationId);
+    if (!reservation) return null;
+    const updated = adjustReservationDates(reservation, newStart, newEnd);
+    const ctx = getContextForPriority();
+    updated.priorityScore = calculatePriorityScore(updated, ctx);
+    return updated;
+  }
+
+  function batchProcessReview(action = 'confirm') {
+    let itemsToProcess = [];
+    const skippedItems = [];
+    const adjustedItems = [];
+
+    for (const item of reviewItems.value) {
+      if (!item.selected) continue;
+
+      const itemAction = item.action || action;
+
+      if (itemAction === 'skip') {
+        skippedItems.push(item);
+      } else if (itemAction === 'adjust' && item.adjustedStart && item.adjustedEnd) {
+        adjustedItems.push(item);
+      } else if (itemAction === 'confirm' && item.canActivate) {
+        itemsToProcess.push(item);
+      }
+    }
+
+    const result = batchActivateReservations(
+      itemsToProcess,
+      {
+        gears: gearList.value,
+        requests: requestList.value
+      },
+      getReviewContext()
+    );
+
+    let updatedList = [...reservationList.value];
+
+    for (const updated of result.updatedReservations) {
+      updatedList = updatedList.map((r) => (r.id === updated.id ? updated : r));
+    }
+
+    for (const skipItem of skippedItems) {
+      const skipped = skipReservation(skipItem.reservation, skipItem.reviewNotes);
+      updatedList = updatedList.map((r) => (r.id === skipped.id ? skipped : r));
+    }
+
+    for (const adjItem of adjustedItems) {
+      const adjusted = doAdjustDates(
+        adjItem.reservation.id,
+        adjItem.adjustedStart,
+        adjItem.adjustedEnd
+      );
+      if (adjusted) {
+        updatedList = updatedList.map((r) => (r.id === adjusted.id ? adjusted : r));
+      }
+    }
+
+    const finalList = computeQueuePositions(updatedList);
+
+    return {
+      ...result,
+      skippedCount: skippedItems.length,
+      adjustedCount: adjustedItems.length,
+      finalList
+    };
+  }
+
+  function analyzeItemConflicts(reservationId) {
+    const reservation = reservationList.value.find((r) => r.id === reservationId);
+    if (!reservation) return null;
+    return analyzeConflicts(reservation, {
+      requests: requestList.value,
+      gears: gearList.value,
+      healthInfoMap: healthMap.value
+    });
+  }
+
+  function findItemAlternativeDates(reservationId, daysToCheck = 30) {
+    const reservation = reservationList.value.find((r) => r.id === reservationId);
+    if (!reservation) return [];
+    return findAlternativeDates(
+      reservation,
+      {
+        requests: requestList.value,
+        gears: gearList.value
+      },
+      daysToCheck
+    );
+  }
+
+  function checkAndActivateWithReview() {
+    const expired = expireOutdatedReservations(reservationList.value);
+    const withPriorities = recalcAllPriorities(expired, getContextForPriority());
+
+    const activatable = findActivatableReservations(withPriorities, {
+      requests: requestList.value,
+      gears: gearList.value
+    });
+
+    const reviewCandidates = analyzeAllActivatableReservations(withPriorities, getReviewContext());
+    const needsReview = reviewCandidates.filter(
+      (item) => !item.canActivate && item.warnings.length > 0 && !item.activationBlockers.length
+    );
+
+    const newRequests = [];
+    let updated = withPriorities;
+
+    if (activatable) {
+      const gear = gearList.value.find((g) => g.id === activatable.gearId);
+      const newRequest = createRequestFromReservation(activatable, gear);
+      newRequests.push(newRequest);
+      updated = updated.map((r) =>
+        r.id === activatable.id ? activateReservation(r, newRequest.id) : r
+      );
+    }
+
+    const finalList = computeQueuePositions(updated);
+
+    return {
+      list: finalList,
+      activated: activatable ? [activatable.id] : [],
+      newRequests,
+      needsReview,
+      reviewModeAvailable: needsReview.length > 0
+    };
+  }
+
+  function refreshReviewAnalysis() {
+    return analyzeForReview();
+  }
+
   return {
     reservationList,
     activeReservations,
     activatedReservations,
     stats,
     sortedQueue,
+    reviewMode,
+    reviewItems,
     addReservation,
     doCancel,
     doActivate,
     checkAndActivate,
+    checkAndActivateWithReview,
     recalcPriorities,
     getQueueForGear,
     getReservationsForGear,
@@ -206,6 +429,20 @@ export function useReservation({ reservations, gears, requests, handovers, membe
     getReservationsByStatus,
     hasReservationForGear,
     getGearReservationCount,
-    updateReservation
+    updateReservation,
+    analyzeForReview,
+    toggleReviewMode,
+    toggleSelectReviewItem,
+    selectAllReviewItems,
+    clearSelection,
+    setItemAction,
+    setItemAdjustedDates,
+    doSkip,
+    doUnskip,
+    doAdjustDates,
+    batchProcessReview,
+    analyzeItemConflicts,
+    findItemAlternativeDates,
+    refreshReviewAnalysis
   };
 }

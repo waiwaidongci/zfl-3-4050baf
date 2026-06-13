@@ -1,155 +1,199 @@
 <template>
   <div class="reservation-panel">
-    <section class="layout">
-      <form class="panel" @submit.prevent="handleAddReservation">
-        <h2>提交候补预约</h2>
-        <label class="muted">选择装备</label>
-        <select v-model="form.gearId" required>
-          <option value="">请选择装备</option>
-          <option v-for="gear in unavailableGears" :key="gear.id" :value="gear.id">
-            {{ gear.name }}（{{ gear.owner }}）· {{ gear.status }}
-          </option>
-          <option v-for="gear in availableButOccupiedGears" :key="gear.id" :value="gear.id">
-            {{ gear.name }}（{{ gear.owner }}）· 日期已被占用
-          </option>
-        </select>
-        <label class="muted">借用人</label>
-        <select v-model="form.borrower">
-          <option v-for="member in members" :key="member.id">{{ member.nickname }}</option>
-        </select>
-        <label class="muted">期望借用日期</label>
-        <div class="split">
-          <input v-model="form.start" type="date" required />
-          <input v-model="form.end" type="date" required />
-        </div>
-        <label class="muted">候补原因</label>
-        <select v-model="form.reason">
-          <option v-for="r in reservationReasons" :key="r">{{ r }}</option>
-        </select>
-        <label class="muted">备注</label>
-        <textarea v-model="form.notes" placeholder="补充说明（可选）" rows="2"></textarea>
-        <button type="submit">加入候补队列</button>
-        <small class="muted">候补预约在装备可用时按顺位自动转正</small>
-      </form>
+    <div v-if="reservation.reviewMode.value">
+      <ReservationReviewPanel
+        :review-items="reservation.reviewItems.value"
+        :requests="requests"
+        @toggle-select="reservation.toggleSelectReviewItem"
+        @select-all="reservation.selectAllReviewItems"
+        @clear-selection="reservation.clearSelection"
+        @set-action="handleSetItemAction"
+        @set-adjusted-dates="reservation.setItemAdjustedDates"
+        @batch-process="handleBatchProcess"
+        @refresh="reservation.analyzeForReview"
+        @exit="handleExitReview"
+        @view-timeline="(payload) => emit('view-timeline', payload)"
+      />
+    </div>
 
-      <div class="panel wide">
-        <div class="toolbar">
-          <h2>候补队列</h2>
-          <div class="filter-group">
-            <select v-model="statusFilter">
-              <option v-for="opt in statusOptions" :key="opt">{{ opt }}</option>
-            </select>
-            <select v-model="gearFilter">
-              <option v-for="opt in gearFilterOptions" :key="opt">{{ opt }}</option>
-            </select>
-          </div>
+    <div v-else>
+      <div class="review-entry-bar">
+        <div class="review-entry-info">
+          <span v-if="reviewableCount > 0" class="review-pending-badge">
+            {{ reviewableCount }} 项候补可转正
+          </span>
+          <span v-if="stats.skipped > 0" class="review-skipped-badge">
+            {{ stats.skipped }} 项已跳过
+          </span>
         </div>
+        <button class="review-entry-btn" @click="handleEnterReview">
+          🔍 候补转正审核
+        </button>
+      </div>
 
-        <div class="reservation-summary">
-          <div class="summary-item">
-            <span class="summary-label">候补中</span>
-            <span class="summary-value active">{{ stats.active }}</span>
+      <section class="layout">
+        <form class="panel" @submit.prevent="handleAddReservation">
+          <h2>提交候补预约</h2>
+          <label class="muted">选择装备</label>
+          <select v-model="form.gearId" required>
+            <option value="">请选择装备</option>
+            <option v-for="gear in unavailableGears" :key="gear.id" :value="gear.id">
+              {{ gear.name }}（{{ gear.owner }}）· {{ gear.status }}
+            </option>
+            <option v-for="gear in availableButOccupiedGears" :key="gear.id" :value="gear.id">
+              {{ gear.name }}（{{ gear.owner }}）· 日期已被占用
+            </option>
+          </select>
+          <label class="muted">借用人</label>
+          <select v-model="form.borrower">
+            <option v-for="member in members" :key="member.id">{{ member.nickname }}</option>
+          </select>
+          <label class="muted">期望借用日期</label>
+          <div class="split">
+            <input v-model="form.start" type="date" required />
+            <input v-model="form.end" type="date" required />
           </div>
-          <div class="summary-item">
-            <span class="summary-label">已转正</span>
-            <span class="summary-value activated">{{ stats.activated }}</span>
-          </div>
-          <div class="summary-item">
-            <span class="summary-label">已取消</span>
-            <span class="summary-value cancelled">{{ stats.cancelled }}</span>
-          </div>
-          <div class="summary-item">
-            <span class="summary-label">已过期</span>
-            <span class="summary-value expired">{{ stats.expired }}</span>
-          </div>
-        </div>
+          <label class="muted">候补原因</label>
+          <select v-model="form.reason">
+            <option v-for="r in reservationReasons" :key="r">{{ r }}</option>
+          </select>
+          <label class="muted">备注</label>
+          <textarea v-model="form.notes" placeholder="补充说明（可选）" rows="2"></textarea>
+          <button type="submit">加入候补队列</button>
+          <small class="muted">候补预约在装备可用时按顺位自动转正</small>
+        </form>
 
-        <div v-if="filteredReservations.length === 0" class="empty-state muted">
-          当前筛选条件下暂无候补预约
-        </div>
-        <div v-else class="reservation-list">
-          <article
-            v-for="reservation in filteredReservations"
-            :key="reservation.id"
-            :class="['reservation-card', reservation.status]"
-          >
-            <div class="reservation-header">
-              <div class="reservation-title-group">
-                <strong>{{ reservation.gearName }}</strong>
-                <span :class="['reservation-status-badge', reservation.status]">
-                  {{ reservation.status }}
-                </span>
+        <div class="panel wide">
+          <div class="toolbar">
+            <h2>候补队列</h2>
+            <div class="filter-group">
+              <select v-model="statusFilter">
+                <option v-for="opt in statusOptions" :key="opt">{{ opt }}</option>
+              </select>
+              <select v-model="gearFilter">
+                <option v-for="opt in gearFilterOptions" :key="opt">{{ opt }}</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="reservation-summary">
+            <div class="summary-item">
+              <span class="summary-label">候补中</span>
+              <span class="summary-value active">{{ stats.active }}</span>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">已转正</span>
+              <span class="summary-value activated">{{ stats.activated }}</span>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">已取消</span>
+              <span class="summary-value cancelled">{{ stats.cancelled }}</span>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">已过期</span>
+              <span class="summary-value expired">{{ stats.expired }}</span>
+            </div>
+            <div v-if="stats.skipped > 0" class="summary-item">
+              <span class="summary-label">已跳过</span>
+              <span class="summary-value skipped">{{ stats.skipped }}</span>
+            </div>
+          </div>
+
+          <div v-if="filteredReservations.length === 0" class="empty-state muted">
+            当前筛选条件下暂无候补预约
+          </div>
+          <div v-else class="reservation-list">
+            <article
+              v-for="reservation in filteredReservations"
+              :key="reservation.id"
+              :class="['reservation-card', reservation.status]"
+            >
+              <div class="reservation-header">
+                <div class="reservation-title-group">
+                  <strong>{{ reservation.gearName }}</strong>
+                  <span :class="['reservation-status-badge', reservation.status]">
+                    {{ reservation.status }}
+                  </span>
+                </div>
+                <div v-if="reservation.status === '候补中' || reservation.status === '审核跳过'" class="queue-position">
+                  顺位 #{{ reservation.queuePosition || '-' }}
+                </div>
               </div>
-              <div v-if="reservation.status === '候补中'" class="queue-position">
-                顺位 #{{ reservation.queuePosition || '-' }}
+              <div class="reservation-meta">
+                <span>装备主人：{{ reservation.owner }}</span>
+                <span>借用人：{{ reservation.borrower }}</span>
+                <span>期望日期：{{ reservation.start }} ~ {{ reservation.end }}</span>
               </div>
+              <div class="reservation-details">
+                <span class="reservation-reason">候补原因：{{ reservation.reason }}</span>
+                <span class="priority-score">优先评分：{{ reservation.priorityScore }}</span>
+              </div>
+              <p v-if="reservation.notes" class="reservation-notes">备注：{{ reservation.notes }}</p>
+              <p v-if="reservation.reviewNotes" class="reservation-notes review-notes">审核备注：{{ reservation.reviewNotes }}</p>
+              <p v-if="reservation.activatedAt" class="activated-time">转正时间：{{ formatDate(reservation.activatedAt) }}</p>
+              <div class="reservation-actions">
+                <button
+                  v-if="(reservation.status === '候补中' || reservation.status === '审核跳过') && reservation.borrower === currentUser"
+                  class="ghost small danger"
+                  @click="handleCancel(reservation.id)"
+                >
+                  取消候补
+                </button>
+                <button
+                  v-if="reservation.status === '候补中'"
+                  class="ghost small"
+                  @click="handleManualActivate(reservation.id)"
+                >
+                  手动转正
+                </button>
+                <button
+                  v-if="reservation.status === '审核跳过'"
+                  class="ghost small"
+                  @click="handleUnskip(reservation.id)"
+                >
+                  恢复候补
+                </button>
+                <button
+                  class="ghost small"
+                  @click="emit('view-timeline', { entityType: 'reservation', entityId: reservation.id, entityName: reservation.gearName || '' })"
+                >
+                  📋 时间线
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel gear-queue-section">
+        <h2>装备候补队列详情</h2>
+        <div v-if="gearQueueList.length === 0" class="empty-state muted">
+          暂无装备存在候补预约
+        </div>
+        <div v-else class="gear-queue-list">
+          <article v-for="gearQueue in gearQueueList" :key="gearQueue.gearId" class="gear-queue-card">
+            <div class="gear-queue-header">
+              <strong>{{ gearQueue.gearName }}</strong>
+              <span class="muted">{{ gearQueue.owner }}</span>
+              <span :class="['gear-status-tag', gearQueue.gearStatus]">{{ gearQueue.gearStatus }}</span>
+              <span class="queue-count">{{ gearQueue.queue.length }} 人候补</span>
             </div>
-            <div class="reservation-meta">
-              <span>装备主人：{{ reservation.owner }}</span>
-              <span>借用人：{{ reservation.borrower }}</span>
-              <span>期望日期：{{ reservation.start }} ~ {{ reservation.end }}</span>
+            <div v-if="gearQueue.queue.length === 0" class="muted" style="padding: 8px 0;">
+              暂无候补
             </div>
-            <div class="reservation-details">
-              <span class="reservation-reason">候补原因：{{ reservation.reason }}</span>
-              <span class="priority-score">优先评分：{{ reservation.priorityScore }}</span>
-            </div>
-            <p v-if="reservation.notes" class="reservation-notes">备注：{{ reservation.notes }}</p>
-            <p v-if="reservation.activatedAt" class="activated-time">转正时间：{{ formatDate(reservation.activatedAt) }}</p>
-            <div class="reservation-actions">
-              <button
-                v-if="reservation.status === '候补中' && reservation.borrower === currentUser"
-                class="ghost small danger"
-                @click="handleCancel(reservation.id)"
-              >
-                取消候补
-              </button>
-              <button
-                v-if="reservation.status === '候补中'"
-                class="ghost small"
-                @click="handleManualActivate(reservation.id)"
-              >
-                手动转正
-              </button>
-              <button
-                class="ghost small"
-                @click="emit('view-timeline', { entityType: 'reservation', entityId: reservation.id, entityName: reservation.gearName || '' })"
-              >
-                📋 时间线
-              </button>
+            <div v-else class="queue-items">
+              <div v-for="(item, index) in gearQueue.queue" :key="item.id" class="queue-item">
+                <span class="queue-rank">{{ index + 1 }}</span>
+                <span class="queue-borrower">{{ item.borrower }}</span>
+                <span class="queue-dates">{{ item.start }} ~ {{ item.end }}</span>
+                <span class="queue-priority">评分 {{ item.priorityScore }}</span>
+                <span :class="['queue-status-tag', item.status]">{{ item.status }}</span>
+              </div>
             </div>
           </article>
         </div>
-      </div>
-    </section>
-
-    <section class="panel gear-queue-section">
-      <h2>装备候补队列详情</h2>
-      <div v-if="gearQueueList.length === 0" class="empty-state muted">
-        暂无装备存在候补预约
-      </div>
-      <div v-else class="gear-queue-list">
-        <article v-for="gearQueue in gearQueueList" :key="gearQueue.gearId" class="gear-queue-card">
-          <div class="gear-queue-header">
-            <strong>{{ gearQueue.gearName }}</strong>
-            <span class="muted">{{ gearQueue.owner }}</span>
-            <span :class="['gear-status-tag', gearQueue.gearStatus]">{{ gearQueue.gearStatus }}</span>
-            <span class="queue-count">{{ gearQueue.queue.length }} 人候补</span>
-          </div>
-          <div v-if="gearQueue.queue.length === 0" class="muted" style="padding: 8px 0;">
-            暂无候补
-          </div>
-          <div v-else class="queue-items">
-            <div v-for="(item, index) in gearQueue.queue" :key="item.id" class="queue-item">
-              <span class="queue-rank">{{ index + 1 }}</span>
-              <span class="queue-borrower">{{ item.borrower }}</span>
-              <span class="queue-dates">{{ item.start }} ~ {{ item.end }}</span>
-              <span class="queue-priority">评分 {{ item.priorityScore }}</span>
-              <span :class="['queue-status-tag', item.status]">{{ item.status }}</span>
-            </div>
-          </div>
-        </article>
-      </div>
-    </section>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -157,6 +201,7 @@
 import { ref, computed, watch, toRef } from 'vue';
 import { useReservation } from '../composables/useReservation.js';
 import { RESERVATION_REASONS } from '../utils/reservationTransform.js';
+import ReservationReviewPanel from './ReservationReviewPanel.vue';
 
 const props = defineProps({
   reservations: {
@@ -189,12 +234,19 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:reservations', 'create-request', 'log-event', 'view-timeline']);
+const emit = defineEmits(['update:reservations', 'create-request', 'log-event', 'view-timeline', 'enter-review-mode']);
 
 const statusFilter = ref('全部状态');
 const gearFilter = ref('全部装备');
-const statusOptions = ['全部状态', '候补中', '已转正', '已取消', '已过期'];
+const statusOptions = ['全部状态', '候补中', '审核跳过', '已转正', '已取消', '已过期'];
 const reservationReasons = RESERVATION_REASONS;
+
+const reviewableCount = computed(() =>
+  props.reservations.filter(r =>
+    (r.status === '候补中' || r.status === '审核跳过') &&
+    !r.generatedRequestId
+  ).length
+);
 
 const reservation = useReservation({
   reservations: toRef(props, 'reservations'),
@@ -379,6 +431,133 @@ function handleManualActivate(reservationId) {
       relatedEntityName: result.request.gearName
     });
   }
+}
+
+function handleUnskip(reservationId) {
+  const target = props.reservations.find((r) => r.id === reservationId);
+  const beforeState = target ? { ...target } : null;
+  const gear = props.gears.find((g) => g.id === target?.gearId);
+  const updated = reservation.doUnskip(reservationId);
+  if (updated) {
+    updateReservations(props.reservations.map((r) => (r.id === reservationId ? updated : r)));
+    emit('log-event', {
+      entityType: 'reservation',
+      entityId: reservationId,
+      entityName: `${gear ? gear.name : '未知装备'} - ${target?.borrower || ''}`,
+      action: 'unskip',
+      beforeState,
+      afterState: updated,
+      sourcePage: '预约排程',
+      notes: '恢复候补中状态',
+      relatedEntityType: 'gear',
+      relatedEntityId: target?.gearId || '',
+      relatedEntityName: gear ? gear.name : ''
+    });
+  }
+}
+
+function handleEnterReview() {
+  reservation.toggleReviewMode();
+  reservation.analyzeForReview();
+  emit('enter-review-mode');
+  emit('log-event', {
+    entityType: 'reservation',
+    entityId: 'review_mode',
+    entityName: '候补转正审核',
+    action: 'enter_review',
+    beforeState: null,
+    afterState: { mode: 'review' },
+    sourcePage: '预约排程',
+    notes: '进入候补转正审核模式'
+  });
+}
+
+function handleExitReview() {
+  reservation.toggleReviewMode();
+  emit('log-event', {
+    entityType: 'reservation',
+    entityId: 'review_mode',
+    entityName: '候补转正审核',
+    action: 'exit_review',
+    beforeState: { mode: 'review' },
+    afterState: { mode: 'normal' },
+    sourcePage: '预约排程',
+    notes: '退出候补转正审核模式'
+  });
+}
+
+function handleSetItemAction(itemId, action, notes = '') {
+  reservation.setItemAction(itemId, action, notes);
+}
+
+function handleBatchProcess() {
+  const selectedItems = reservation.reviewItems.value.filter(i => i.selected);
+  if (selectedItems.length === 0) {
+    alert('请先选择要处理的项目');
+    return;
+  }
+
+  const confirmCount = selectedItems.filter(i => (i.action === 'confirm' || !i.action) && i.canActivate).length;
+  const skipCount = selectedItems.filter(i => i.action === 'skip').length;
+  const adjustCount = selectedItems.filter(i => i.action === 'adjust' && i.adjustedStart).length;
+
+  if (!confirm(`确定批量处理已选择的 ${selectedItems.length} 项？\n\n- ${confirmCount} 项将转正\n- ${skipCount} 项将跳过\n- ${adjustCount} 项将调整日期`)) {
+    return;
+  }
+
+  const result = reservation.batchProcessReview();
+
+  if (result.finalList) {
+    updateReservations(result.finalList);
+  }
+
+  for (const req of result.newRequests || []) {
+    emit('create-request', req);
+  }
+
+  for (const item of selectedItems) {
+    const gear = props.gears.find((g) => g.id === item.reservation.gearId);
+    const action = item.action || 'confirm';
+    let actionName = '转正';
+    if (action === 'skip') actionName = '跳过';
+    if (action === 'adjust') actionName = '调整日期';
+
+    emit('log-event', {
+      entityType: 'reservation',
+      entityId: item.reservation.id,
+      entityName: `${gear ? gear.name : '未知装备'} - ${item.reservation.borrower}`,
+      action: action === 'skip' ? 'skip' : (action === 'adjust' ? 'adjust_dates' : 'activate'),
+      beforeState: { status: item.reservation.status },
+      afterState: result.updatedReservations?.find(r => r.id === item.reservation.id) || { status: `已${actionName}` },
+      sourcePage: '预约排程',
+      notes: `审核批量处理 - ${actionName}`,
+      relatedEntityType: action === 'confirm' ? 'request' : 'gear',
+      relatedEntityId: action === 'confirm' && result.newRequests ? result.newRequests.find(r => r.fromReservationId === item.reservation.id)?.id : (item.reservation.gearId || ''),
+      relatedEntityName: action === 'confirm' && result.newRequests ? result.newRequests.find(r => r.fromReservationId === item.reservation.id)?.gearName : (gear ? gear.name : '')
+    });
+  }
+
+  const successCount = (result.successCount || 0) + (result.skippedCount || 0) + (result.adjustedCount || 0);
+  if (successCount > 0) {
+    setTimeout(() => {
+      reservation.analyzeForReview();
+    }, 100);
+  }
+
+  let msg = `批量处理完成：\n`;
+  if (result.successCount > 0) msg += `- ${result.successCount} 项已转正\n`;
+  if (result.skippedCount > 0) msg += `- ${result.skippedCount} 项已跳过\n`;
+  if (result.adjustedCount > 0) msg += `- ${result.adjustedCount} 项已调整日期\n`;
+  if (result.errors && result.errors.length > 0) {
+    msg += `\n${result.errors.length} 项处理失败：\n`;
+    result.errors.slice(0, 5).forEach(e => {
+      msg += `- ${e.message || e.errors?.map(er => er.message).join(', ') || '未知错误'}\n`;
+    });
+    if (result.errors.length > 5) {
+      msg += `... 还有 ${result.errors.length - 5} 条错误`;
+    }
+  }
+  alert(msg);
 }
 
 function formatDate(isoStr) {
@@ -830,5 +1009,96 @@ function formatDate(isoStr) {
   .queue-item {
     flex-wrap: wrap;
   }
+}
+
+.review-entry-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(135deg, #2f4a2c 0%, #3d5c37 100%);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.review-entry-info {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.review-pending-badge {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.review-skipped-badge {
+  background: rgba(197, 138, 43, 0.3);
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.review-entry-btn {
+  background: #fff;
+  color: #2f4a2c;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.review-entry-btn:hover {
+  background: #f0f4e8;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.summary-value.skipped {
+  color: #c58a2b;
+}
+
+.reservation-card.审核跳过 {
+  border-left: 4px solid #c58a2b;
+  opacity: 0.9;
+}
+
+.reservation-status-badge.审核跳过 {
+  background: #fdf3e0;
+  color: #8a6d1b;
+}
+
+.queue-status-tag.审核跳过 {
+  background: #fdf3e0;
+  color: #8a6d1b;
+}
+
+.review-notes {
+  color: #8a6d1b !important;
+  background: #fdf3e0;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+.queue-status-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: auto;
+}
+
+.queue-status-tag.候补中 {
+  background: #fdf3e0;
+  color: #8a6d1b;
 }
 </style>
