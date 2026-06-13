@@ -207,7 +207,8 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     const hasAbnormal =
       item.checkStatus === '缺失' ||
       !!(item.missingAccessories && item.missingAccessories.trim()) ||
-      !!(item.notes && item.notes.trim());
+      !!(item.notes && item.notes.trim()) ||
+      (Array.isArray(item.abnormalActions) && item.abnormalActions.some((a) => a.status !== '已取消'));
     return { ...item, hasAbnormal };
   }
 
@@ -218,7 +219,8 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
       type: actionData.type,
       description: actionData.description || '',
       amount: actionData.amount || '0',
-      handler: actionData.handler || user.value
+      handler: actionData.handler || user.value,
+      borrower: actionData.borrower || ''
     });
     return {
       ...list,

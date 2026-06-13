@@ -43,6 +43,7 @@ function collectInventoryDepositDeductions(inventoryLists, tripMembers, tripGear
         if (action.status === '已取消') return;
         const amount = Number(action.amount) || 0;
         if (amount <= 0) return;
+        const borrower = action.borrower || item.owner;
         deductions.push({
           id: `inv-${action.id}`,
           source: 'inventory',
@@ -54,6 +55,7 @@ function collectInventoryDepositDeductions(inventoryLists, tripMembers, tripGear
           gearId: item.gearId,
           gearName: item.gearName,
           owner: item.owner,
+          borrower,
           actionId: action.id,
           amount: String(amount),
           description: action.description,
@@ -74,6 +76,13 @@ export function linkDepositsToSettlement(settlement, depositRecords, tripMembers
   const useGearFilter = tripGearIds.size > 0;
   const useRequestFilter = Array.isArray(tripRequestIds);
 
+  const existingDepositMap = {};
+  settlement.members.forEach((sm) => {
+    (sm.depositItems || []).forEach((d) => {
+      existingDepositMap[d.depositId] = d;
+    });
+  });
+
   const relevantDeposits = depositRecords.filter((d) => {
     if (!memberNames.has(d.borrower)) return false;
     if (useGearFilter && !tripGearIds.has(d.gearId)) return false;
@@ -85,31 +94,36 @@ export function linkDepositsToSettlement(settlement, depositRecords, tripMembers
 
   const updatedMembers = settlement.members.map((sm) => {
     const memberDeposits = relevantDeposits.filter((d) => d.borrower === sm.nickname);
-    const depositItems = memberDeposits.map((d) => ({
-      depositId: d.id,
-      gearName: d.gearName,
-      depositAmount: d.depositAmount || '0',
-      deductedAmount: d.deductedAmount || '0',
-      actualDeduct: d.deductedAmount || '0',
-      source: 'deposit'
-    }));
-    const memberInventoryDeductions = inventoryDeductions.filter((d) => {
-      if (d.owner === sm.nickname) return true;
-      return false;
+    const depositItems = memberDeposits.map((d) => {
+      const existing = existingDepositMap[d.id];
+      return {
+        depositId: d.id,
+        gearName: d.gearName,
+        depositAmount: d.depositAmount || '0',
+        deductedAmount: d.deductedAmount || '0',
+        actualDeduct: existing ? existing.actualDeduct : (d.deductedAmount || '0'),
+        source: 'deposit'
+      };
     });
-    const inventoryItems = memberInventoryDeductions.map((d) => ({
-      depositId: d.id,
-      gearName: d.gearName,
-      depositAmount: '0',
-      deductedAmount: d.amount,
-      actualDeduct: d.status === '已处理' ? d.amount : '0',
-      source: 'inventory',
-      inventoryId: d.inventoryId,
-      inventoryName: d.inventoryName,
-      inventoryDate: d.inventoryDate,
-      description: d.description,
-      pending: d.status === '待处理'
-    }));
+    const memberInventoryDeductions = inventoryDeductions.filter((d) => {
+      return d.borrower === sm.nickname;
+    });
+    const inventoryItems = memberInventoryDeductions.map((d) => {
+      const existing = existingDepositMap[d.id];
+      return {
+        depositId: d.id,
+        gearName: d.gearName,
+        depositAmount: '0',
+        deductedAmount: d.amount,
+        actualDeduct: existing ? existing.actualDeduct : (d.status === '已处理' ? d.amount : '0'),
+        source: 'inventory',
+        inventoryId: d.inventoryId,
+        inventoryName: d.inventoryName,
+        inventoryDate: d.inventoryDate,
+        description: d.description,
+        pending: d.status === '待处理'
+      };
+    });
     return { ...sm, depositItems: [...depositItems, ...inventoryItems] };
   });
 
@@ -256,6 +270,13 @@ export function syncDepositChanges(settlement, depositRecords, tripGears = [], t
   const useGearFilter = tripGearIds.size > 0;
   const useRequestFilter = Array.isArray(tripRequestIds);
 
+  const existingDepositMap = {};
+  settlement.members.forEach((sm) => {
+    (sm.depositItems || []).forEach((d) => {
+      existingDepositMap[d.depositId] = d;
+    });
+  });
+
   const members = settlement.members.map((sm) => {
     const memberDeposits = depositRecords.filter((d) => {
       if (d.borrower !== sm.nickname) return false;
@@ -263,13 +284,9 @@ export function syncDepositChanges(settlement, depositRecords, tripGears = [], t
       if (useRequestFilter && !requestIds.has(d.requestId)) return false;
       return true;
     });
-    const existingMap = {};
-    sm.depositItems.forEach((d) => {
-      existingMap[d.depositId] = d;
-    });
 
     const depositItems = memberDeposits.map((d) => {
-      const existing = existingMap[d.id];
+      const existing = existingDepositMap[d.id];
       return {
         depositId: d.id,
         gearName: d.gearName,
@@ -282,13 +299,24 @@ export function syncDepositChanges(settlement, depositRecords, tripGears = [], t
 
     const inventoryDeductions = collectInventoryDepositDeductions(inventoryLists, [sm], tripGears);
     const inventoryItems = inventoryDeductions.map((d) => {
-      const existing = existingMap[d.id];
+      const existing = existingDepositMap[d.id];
+      const defaultDeduct = d.status === '已处理' ? d.amount : '0';
+      let actualDeduct;
+      if (existing) {
+        if (existing.actualDeduct === '0' && d.status === '已处理') {
+          actualDeduct = d.amount;
+        } else {
+          actualDeduct = existing.actualDeduct;
+        }
+      } else {
+        actualDeduct = defaultDeduct;
+      }
       return {
         depositId: d.id,
         gearName: d.gearName,
         depositAmount: '0',
         deductedAmount: d.amount,
-        actualDeduct: existing ? existing.actualDeduct : (d.status === '已处理' ? d.amount : '0'),
+        actualDeduct,
         source: 'inventory',
         inventoryId: d.inventoryId,
         inventoryName: d.inventoryName,

@@ -134,14 +134,14 @@
               </div>
 
               <div v-if="sm.depositItems.length > 0" class="ms-deposits">
-                <div class="ms-sub-title">所借装备押金</div>
+                <div class="ms-sub-title">押金及扣除项</div>
                 <div v-for="(dep, dIdx) in sm.depositItems" :key="dep.depositId" class="ms-deposit-row" :class="{ 'from-inventory': dep.source === 'inventory' }">
                   <span class="dep-gear">
                     {{ dep.gearName }}
                     <span v-if="dep.source === 'inventory'" class="dep-source">盘点异常</span>
                   </span>
-                  <span class="dep-amount">押金 ¥{{ dep.depositAmount }}</span>
-                  <span class="dep-deducted">应扣 ¥{{ dep.deductedAmount }}</span>
+                  <span v-if="dep.source === 'deposit'" class="dep-amount">押金 ¥{{ dep.depositAmount }}</span>
+                  <span class="dep-deducted">{{ dep.source === 'inventory' ? '应扣' : '已扣' }} ¥{{ dep.deductedAmount }}</span>
                   <div class="dep-actual">
                     <label>本次结算扣除</label>
                     <input
@@ -155,6 +155,9 @@
                   </div>
                   <div v-if="dep.source === 'inventory' && dep.description" class="dep-desc">
                     📝 {{ dep.description }}
+                  </div>
+                  <div v-if="dep.source === 'inventory' && dep.inventoryName" class="dep-inventory-info">
+                    📋 来源：{{ dep.inventoryName }}
                   </div>
                   <div v-if="dep.source === 'inventory' && dep.pending" class="dep-pending">
                     ⏳ 待确认处理
@@ -537,6 +540,12 @@ function handleNotesChange(value) {
   font-size: 12px;
   color: #b45309;
   font-weight: 500;
+  margin-top: 2px;
+}
+.dep-inventory-info {
+  width: 100%;
+  font-size: 11px;
+  color: #888;
   margin-top: 2px;
 }
 .ms-no-deposits { font-size: 13px; margin-bottom: 8px; }

@@ -91,7 +91,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:inventoryLists']);
+const emit = defineEmits(['update:inventoryLists', 'process-abnormal-action']);
 
 const selectedId = ref(null);
 
@@ -245,9 +245,29 @@ function handleAddAction(itemId, actionData) {
 }
 
 function handleUpdateAction(itemId, actionId, updates) {
+  const list = inventory.getListById(selectedId.value);
+  if (!list) return;
+  const item = list.items.find((i) => i.id === itemId);
+  const action = item?.abnormalActions?.find((a) => a.id === actionId);
+  if (!action) return;
+
+  const prevStatus = action.status;
+  const newStatus = updates.status;
+
   const updated = inventory.updateAbnormalAction(selectedId.value, itemId, actionId, updates);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+
+    if (prevStatus !== '已处理' && newStatus === '已处理') {
+      const updatedItem = updated.items.find((i) => i.id === itemId);
+      const updatedAction = updatedItem?.abnormalActions?.find((a) => a.id === actionId);
+      emit('process-abnormal-action', {
+        action: updatedAction,
+        item: { id: updatedItem.id, gearId: updatedItem.gearId, gearName: updatedItem.gearName, owner: updatedItem.owner },
+        inventoryId: selectedId.value,
+        inventoryName: list.name
+      });
+    }
   }
 }
 

@@ -76,6 +76,13 @@
                 placeholder="扣除金额"
               />
             </div>
+            <div v-if="newActionType === '押金扣除'" class="edit-row">
+              <label>扣除对象</label>
+              <select v-model="newActionBorrower">
+                <option value="">请选择成员</option>
+                <option v-for="m in memberNames" :key="m" :value="m">{{ m }}</option>
+              </select>
+            </div>
             <div class="edit-row">
               <label></label>
               <button class="small primary" @click.stop="handleAddAction">确认添加</button>
@@ -96,6 +103,7 @@
               <div class="action-meta">
                 <span v-if="action.amount && Number(action.amount) > 0">¥{{ action.amount }}</span>
                 <span v-if="action.handler">操作人：{{ action.handler }}</span>
+                <span v-if="action.borrower && action.type === '押金扣除'">扣除对象：{{ action.borrower }}</span>
               </div>
               <div class="action-ops">
                 <select
@@ -160,6 +168,7 @@ const showAddAction = ref(false);
 const newActionType = ref('');
 const newActionDesc = ref('');
 const newActionAmount = ref('');
+const newActionBorrower = ref('');
 
 const statusOptions = ['待盘点', '已盘点', '缺失'];
 const actionTypes = ['装备损耗', '保养记录', '押金扣除'];
@@ -209,14 +218,20 @@ function handleAddAction() {
     alert('请选择处理类型');
     return;
   }
+  if (newActionType.value === '押金扣除' && !newActionBorrower.value) {
+    alert('请选择扣除对象');
+    return;
+  }
   emit('add-action', {
     type: newActionType.value,
     description: newActionDesc.value,
-    amount: newActionAmount.value || '0'
+    amount: newActionAmount.value || '0',
+    borrower: newActionBorrower.value || ''
   });
   newActionType.value = '';
   newActionDesc.value = '';
   newActionAmount.value = '';
+  newActionBorrower.value = '';
   showAddAction.value = false;
 }
 

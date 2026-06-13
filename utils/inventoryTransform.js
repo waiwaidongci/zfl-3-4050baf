@@ -42,13 +42,14 @@ export function createInventoryList({ name, type, tripId = '', tripName = '', ch
   };
 }
 
-export function createAbnormalAction({ type, description = '', amount = '0', handler = '' }) {
+export function createAbnormalAction({ type, description = '', amount = '0', handler = '', borrower = '' }) {
   return {
     id: crypto.randomUUID(),
     type,
     description,
     amount: String(amount),
     handler,
+    borrower,
     status: '待处理',
     relatedRecordId: '',
     createdAt: new Date().toISOString(),

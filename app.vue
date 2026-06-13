@@ -1715,6 +1715,68 @@ function handleCreateMaintenanceFromProfile({ gearId, type }) {
   alert(`已为「${gear.name}」创建保养记录，下次保养日期自动更新为 ${nextDate}`);
 }
 
+function handleProcessAbnormalAction({ action, item, inventoryId, inventoryName }) {
+  if (!action || !item) return;
+
+  if (action.type === '保养记录') {
+    const gear = gears.value.find((g) => g.id === item.gearId);
+    if (!gear) return;
+
+    const recordId = crypto.randomUUID();
+    const description = action.description
+      ? `盘点异常处理：${action.description}（来源：${inventoryName}）`
+      : `盘点异常触发的保养（来源：${inventoryName}）`;
+
+    maintenanceRecords.value = [{
+      id: recordId,
+      gearId: gear.id,
+      gearName: gear.name,
+      owner: gear.owner,
+      date: new Date().toISOString().slice(0, 10),
+      type: '检查',
+      description,
+      handler: action.handler || currentUser.value
+    }, ...maintenanceRecords.value];
+
+    const cycle = Number(gear.maintenanceCycleDays) || 30;
+    gears.value = gears.value.map((g) =>
+      g.id === gear.id
+        ? { ...g, nextMaintenanceDate: iso(cycle) }
+        : g
+    );
+
+    inventoryLists.value = inventoryLists.value.map((list) => {
+      if (list.id !== inventoryId) return list;
+      return {
+        ...list,
+        items: list.items.map((i) => {
+          if (i.id !== item.id) return i;
+          return {
+            ...i,
+            abnormalActions: (i.abnormalActions || []).map((a) =>
+              a.id === action.id ? { ...a, relatedRecordId: recordId } : a
+            )
+          };
+        })
+      };
+    });
+
+    alert(`已为「${gear.name}」创建保养记录，下次保养日期已更新`);
+  }
+
+  if (action.type === '装备损耗') {
+    const gear = gears.value.find((g) => g.id === item.gearId);
+    if (!gear) return;
+    const damageText = action.description || '盘点发现损耗';
+    const existingDamage = (gear.damage || '').trim();
+    gears.value = gears.value.map((g) =>
+      g.id === gear.id
+        ? { ...g, damage: existingDamage ? `${existingDamage}；${damageText}` : damageText }
+        : g
+    );
+  }
+}
+
 function deleteMaintenance(id) {
   if (!confirm('确定删除该保养记录？')) return;
   maintenanceRecords.value = maintenanceRecords.value.filter((r) => r.id !== id);
@@ -2749,6 +2811,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       :members="members"
       :current-user="currentUser"
       @update:inventory-lists="val => inventoryLists = val"
+      @process-abnormal-action="handleProcessAbnormalAction"
     />
 
     <SettlementPanel

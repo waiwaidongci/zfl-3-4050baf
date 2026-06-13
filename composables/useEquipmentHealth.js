@@ -490,21 +490,24 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
       maintenanceRecords: relatedMaintenance.value,
       depositRecords: relatedDeposits.value
     });
-    const inventoryEvents = inventoryAbnormalActions.value.map((a) => ({
-      id: `inv-${a.id}`,
-      date: a.createdAt.slice(0, 10),
-      type: a.type === '装备损耗' ? 'inventory-damage' : (a.type === '保养记录' ? 'inventory-maintenance' : 'inventory-deposit'),
-      subType: a.status,
-      title: `${a.type}（盘点异常）`,
-      description: a.description,
-      meta: {
-        inventoryName: a.inventoryName,
-        inventoryType: a.inventoryType,
-        handler: a.handler,
-        amount: a.amount,
-        status: a.status
-      }
-    }));
+    const inventoryEvents = inventoryAbnormalActions.value
+      .filter((a) => !a.relatedRecordId)
+      .map((a) => ({
+        id: `inv-${a.id}`,
+        date: a.createdAt.slice(0, 10),
+        type: a.type === '装备损耗' ? 'inventory-damage' : (a.type === '保养记录' ? 'inventory-maintenance' : 'inventory-deposit'),
+        subType: a.status,
+        title: `${a.type}（盘点异常）`,
+        description: a.description,
+        meta: {
+          inventoryName: a.inventoryName,
+          inventoryType: a.inventoryType,
+          handler: a.handler,
+          borrower: a.borrower || undefined,
+          amount: (a.type === '押金扣除' && a.amount) ? a.amount : undefined,
+          status: a.status
+        }
+      }));
     return [...baseEvents, ...inventoryEvents].sort((a, b) => b.date.localeCompare(a.date));
   });
 
