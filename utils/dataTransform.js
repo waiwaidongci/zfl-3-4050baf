@@ -644,6 +644,10 @@ export function matchTrip(existingTrips, imported) {
 }
 
 export function matchHandoverRecord(existingRecords, imported) {
+  if (imported.requestId) {
+    const byRequest = existingRecords.find((r) => r.requestId === imported.requestId && r.type === imported.type);
+    if (byRequest) return byRequest;
+  }
   return existingRecords.find((r) =>
     r.gearName === imported.gearName &&
     r.owner === imported.owner &&
@@ -904,10 +908,11 @@ export function analyzeMergeData(currentData, importedData) {
       }
 
       const importId = item.id;
-      const matched = typeof matcher === 'function' ? matcher(existing, item) : null;
+      const itemForMatch = reconnectRelationalFields(item, idMap);
+      const matched = typeof matcher === 'function' ? matcher(existing, itemForMatch) : null;
 
       if (matched && matched.id) {
-        const isIdentical = deepCompareForEquivalence(item, matched);
+        const isIdentical = deepCompareForEquivalence(itemForMatch, matched);
 
         if (importId && typeof importId === 'string') {
           idMap[entityKey][importId] = matched.id;
@@ -918,7 +923,7 @@ export function analyzeMergeData(currentData, importedData) {
           stats.skippedItems.push(item);
         } else {
           stats.updated++;
-          stats.updatedItems.push({ old: { ...matched }, new: item });
+          stats.updatedItems.push({ old: { ...matched }, new: itemForMatch });
         }
       } else {
         let isUnmatched = false;
