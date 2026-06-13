@@ -53,9 +53,9 @@ export function createDefaultMembers() {
 
 export function createDefaultGears(ownerName = '阿岚', stoveOwner = '梁序', lampOwner = '小北') {
   return [
-    { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: ownerName, available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
-    { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: stoveOwner, available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '' },
-    { id: crypto.randomUUID(), name: '营地灯三件组', category: '照明', owner: lampOwner, available: iso(3), deposit: '50', status: '可借', notes: '满电交接', damage: '' }
+    { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: ownerName, available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '', maintenanceCycleDays: 30, nextMaintenanceDate: iso(30), maintenanceReminderLevel: '标准' },
+    { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: stoveOwner, available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '', maintenanceCycleDays: 15, nextMaintenanceDate: iso(15), maintenanceReminderLevel: '严格' },
+    { id: crypto.randomUUID(), name: '营地灯三件组', category: '照明', owner: lampOwner, available: iso(3), deposit: '50', status: '可借', notes: '满电交接', damage: '', maintenanceCycleDays: 60, nextMaintenanceDate: iso(60), maintenanceReminderLevel: '宽松' }
   ];
 }
 
@@ -165,8 +165,8 @@ export function loadSpaceData(spaceId, onError = null) {
       if (onError) onError('空间数据格式损坏，已加载空白数据。可尝试重新创建空间。');
       return createEmptySpaceData();
     }
-    const members = Array.isArray(data.members) ? data.members.filter((m) => m && m.nickname) : createDefaultMembers();
-    const gears = Array.isArray(data.gears) ? data.gears.filter((g) => g && g.name) : createDefaultGears();
+    const members = normalizeMembers(data.members || []).data;
+    const gears = normalizeGears(data.gears || []).data;
     const requests = normalizeRequests(data.requests, gears).data;
     const maintenanceRecords = normalizeMaintenanceRecords(data.maintenanceRecords || [], gears).data;
     const trips = normalizeTrips(data.trips || [], gears, members).data;

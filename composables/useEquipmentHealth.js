@@ -2,6 +2,12 @@ import { computed } from 'vue';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const REMINDER_LEVEL_DAYS = {
+  '宽松': 7,
+  '标准': 14,
+  '严格': 30
+};
+
 function daysBetween(dateStr1, dateStr2) {
   const d1 = new Date(dateStr1);
   const d2 = new Date(dateStr2);
@@ -10,6 +16,51 @@ function daysBetween(dateStr1, dateStr2) {
 
 function daysAgo(dateStr) {
   return daysBetween(dateStr, new Date().toISOString().slice(0, 10));
+}
+
+function daysUntil(dateStr) {
+  return daysBetween(new Date().toISOString().slice(0, 10), dateStr);
+}
+
+function getMaintenancePlanStatus(gear) {
+  if (!gear || !gear.nextMaintenanceDate) {
+    return { status: 'normal', daysUntil: null, label: '未设置计划' };
+  }
+
+  const cycle = Number(gear.maintenanceCycleDays) || 30;
+  const reminderLevel = gear.maintenanceReminderLevel || '标准';
+  const reminderDays = REMINDER_LEVEL_DAYS[reminderLevel] || 14;
+  const daysLeft = daysUntil(gear.nextMaintenanceDate);
+
+  if (daysLeft < 0) {
+    return {
+      status: 'overdue',
+      daysUntil: daysLeft,
+      daysOverdue: Math.abs(daysLeft),
+      label: `已逾期 ${Math.abs(daysLeft)} 天`,
+      cycle,
+      reminderLevel,
+      nextDate: gear.nextMaintenanceDate
+    };
+  } else if (daysLeft <= reminderDays) {
+    return {
+      status: 'upcoming',
+      daysUntil: daysLeft,
+      label: `还剩 ${daysLeft} 天`,
+      cycle,
+      reminderLevel,
+      nextDate: gear.nextMaintenanceDate
+    };
+  }
+
+  return {
+    status: 'normal',
+    daysUntil: daysLeft,
+    label: `还剩 ${daysLeft} 天`,
+    cycle,
+    reminderLevel,
+    nextDate: gear.nextMaintenanceDate
+  };
 }
 
 function getCompletedBorrowHandovers(handovers) {
@@ -104,7 +155,7 @@ function buildTimelineEvents({ gear, requests, handovers, maintenanceRecords, de
   return events.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-function computeRiskTags({ gear, borrowCount, damageCount, depositDeductCount, daysSinceLastMaintenance, hasActiveBorrow }) {
+function computeRiskTags({ gear, borrowCount, damageCount, depositDeductCount, daysSinceLastMaintenance, hasActiveBorrow, maintenancePlanStatus }) {
   const tags = [];
 
   if (gear.damage && gear.damage.trim()) {
@@ -117,6 +168,12 @@ function computeRiskTags({ gear, borrowCount, damageCount, depositDeductCount, d
 
   if (depositDeductCount > 0) {
     tags.push({ key: 'deposit-deduct', level: 'warning', label: `押金扣除 ${depositDeductCount} 次`, icon: '💰' });
+  }
+
+  if (maintenancePlanStatus?.status === 'overdue') {
+    tags.push({ key: 'plan-overdue', level: 'danger', label: `保养计划逾期 ${maintenancePlanStatus.daysOverdue} 天`, icon: '🚨' });
+  } else if (maintenancePlanStatus?.status === 'upcoming') {
+    tags.push({ key: 'plan-upcoming', level: 'warning', label: `保养临近 · 还剩 ${maintenancePlanStatus.daysUntil} 天`, icon: '⏰' });
   }
 
   if (daysSinceLastMaintenance === null) {
@@ -138,7 +195,7 @@ function computeRiskTags({ gear, borrowCount, damageCount, depositDeductCount, d
   return tags;
 }
 
-function computeSuggestedActions({ gear, riskTags, daysSinceLastMaintenance, borrowCount, damageCount, depositDeductTotal }) {
+function computeSuggestedActions({ gear, riskTags, daysSinceLastMaintenance, borrowCount, damageCount, depositDeductTotal, maintenancePlanStatus }) {
   const actions = [];
 
   if (gear.damage && gear.damage.trim()) {
@@ -150,12 +207,32 @@ function computeSuggestedActions({ gear, riskTags, daysSinceLastMaintenance, bor
     });
   }
 
-  if (daysSinceLastMaintenance === null || daysSinceLastMaintenance > 60) {
+  if (maintenancePlanStatus?.status === 'overdue') {
+    actions.push({
+      key: 'maintenance-plan-overdue',
+      priority: 'high',
+      title: `立即执行保养（已逾期 ${maintenancePlanStatus.daysOverdue} 天）`,
+      description: `保养计划已逾期，请立即进行 ${maintenancePlanStatus.cycle} 天周期的常规保养，完成后将自动更新下次保养日期。`,
+      canCreateMaintenance: true,
+      maintenanceType: '检查'
+    });
+  } else if (maintenancePlanStatus?.status === 'upcoming') {
+    actions.push({
+      key: 'maintenance-plan-upcoming',
+      priority: 'high',
+      title: `近期安排保养（还剩 ${maintenancePlanStatus.daysUntil} 天）`,
+      description: `保养计划将于 ${maintenancePlanStatus.nextDate} 到期，建议提前安排 ${maintenancePlanStatus.cycle} 天周期的常规保养。`,
+      canCreateMaintenance: true,
+      maintenanceType: '检查'
+    });
+  } else if (daysSinceLastMaintenance === null || daysSinceLastMaintenance > 60) {
     actions.push({
       key: 'maintenance',
       priority: 'high',
       title: daysSinceLastMaintenance === null ? '建议进行首次保养' : `安排定期保养（超 ${daysSinceLastMaintenance} 天）`,
-      description: '建议进行清洁、检查，必要时更换易损件，延长装备使用寿命。'
+      description: '建议进行清洁、检查，必要时更换易损件，延长装备使用寿命。',
+      canCreateMaintenance: true,
+      maintenanceType: '清洁'
     });
   }
 
@@ -173,7 +250,9 @@ function computeSuggestedActions({ gear, riskTags, daysSinceLastMaintenance, bor
       key: 'inspect',
       priority: 'medium',
       title: '进行深度检查',
-      description: `该装备已累计借出 ${borrowCount} 次，建议对关键部位进行全面检查。`
+      description: `该装备已累计借出 ${borrowCount} 次，建议对关键部位进行全面检查。`,
+      canCreateMaintenance: true,
+      maintenanceType: '检查'
     });
   }
 
@@ -204,11 +283,16 @@ function resolve(val) {
   return val;
 }
 
-export function calcOverallHealthScore({ gear, damageCount, depositDeductCount, daysSinceLastMaintenance, borrowCount }) {
+export function calcOverallHealthScore({ gear, damageCount, depositDeductCount, daysSinceLastMaintenance, borrowCount, maintenancePlanStatus }) {
   let score = 100;
   if ((gear?.damage || '').trim()) score -= 25;
   if (damageCount > 0) score -= Math.min(damageCount * 8, 25);
   if (depositDeductCount > 0) score -= Math.min(depositDeductCount * 5, 15);
+  if (maintenancePlanStatus?.status === 'overdue') {
+    score -= Math.min(maintenancePlanStatus.daysOverdue * 2, 25);
+  } else if (maintenancePlanStatus?.status === 'upcoming') {
+    score -= 5;
+  }
   if (daysSinceLastMaintenance === null) score -= 10;
   else if (daysSinceLastMaintenance > 90) score -= 20;
   else if (daysSinceLastMaintenance > 60) score -= 10;
@@ -242,18 +326,22 @@ export function buildAllHealthInfoMap({ gears, requests, handovers, maintenanceR
     const relatedDeposits = dList.filter((d) => d.gearId === gear.id);
     const depositDeductCount = relatedDeposits.filter((d) => Number(d.deductedAmount) > 0).length;
 
+    const maintenancePlanStatus = getMaintenancePlanStatus(gear);
+
     map[gear.id] = {
       gearId: gear.id,
       borrowCount,
       damageCount,
       depositDeductCount,
       daysSinceLastMaintenance,
+      maintenancePlanStatus,
       overallHealthScore: calcOverallHealthScore({
         gear,
         damageCount,
         depositDeductCount,
         daysSinceLastMaintenance,
-        borrowCount
+        borrowCount,
+        maintenancePlanStatus
       })
     };
   }
@@ -311,6 +399,10 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
     lastMaintenance.value ? daysAgo(lastMaintenance.value.date) : null
   );
 
+  const maintenancePlanStatus = computed(() =>
+    gear.value ? getMaintenancePlanStatus(gear.value) : null
+  );
+
   const damageRecords = computed(() =>
     relatedHandovers.value.filter((h) => h.damageRecord && h.damageRecord.trim())
   );
@@ -348,7 +440,8 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
       damageCount: damageCount.value,
       depositDeductCount: depositDeductCount.value,
       daysSinceLastMaintenance: daysSinceLastMaintenance.value,
-      hasActiveBorrow: !!activeBorrow.value
+      hasActiveBorrow: !!activeBorrow.value,
+      maintenancePlanStatus: maintenancePlanStatus.value
     })
   );
 
@@ -359,7 +452,8 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
       daysSinceLastMaintenance: daysSinceLastMaintenance.value,
       borrowCount: borrowCount.value,
       damageCount: damageCount.value,
-      depositDeductTotal: depositDeductTotal.value
+      depositDeductTotal: depositDeductTotal.value,
+      maintenancePlanStatus: maintenancePlanStatus.value
     })
   );
 
@@ -369,7 +463,8 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
       damageCount: damageCount.value,
       depositDeductCount: depositDeductCount.value,
       daysSinceLastMaintenance: daysSinceLastMaintenance.value,
-      borrowCount: borrowCount.value
+      borrowCount: borrowCount.value,
+      maintenancePlanStatus: maintenancePlanStatus.value
     })
   );
 
@@ -392,6 +487,7 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
     activeBorrow,
     lastMaintenance,
     daysSinceLastMaintenance,
+    maintenancePlanStatus,
     damageCount,
     depositDeductCount,
     depositDeductTotal,

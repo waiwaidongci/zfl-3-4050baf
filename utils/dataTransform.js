@@ -38,6 +38,19 @@ export function normalizeMembers(rawMembers) {
   return { data, warnings };
 }
 
+export function getDefaultMaintenancePlan(gear) {
+  const defaultCycle = 30;
+  const defaultReminder = '标准';
+  const cycle = Number(gear?.maintenanceCycleDays) || defaultCycle;
+  const nextDate = gear?.nextMaintenanceDate || iso(cycle);
+  const reminder = gear?.maintenanceReminderLevel || defaultReminder;
+  return {
+    maintenanceCycleDays: cycle,
+    nextMaintenanceDate: nextDate,
+    maintenanceReminderLevel: reminder
+  };
+}
+
 export function normalizeGears(rawGears) {
   const warnings = [];
   if (!Array.isArray(rawGears)) {
@@ -54,17 +67,23 @@ export function normalizeGears(rawGears) {
       return false;
     }
     return true;
-  }).map((g) => ({
-    id: g.id || crypto.randomUUID(),
-    name: g.name,
-    category: g.category || '其他',
-    owner: g.owner || '未知',
-    available: g.available || iso(0),
-    deposit: g.deposit !== undefined ? String(g.deposit) : '0',
-    status: g.status || '可借',
-    notes: g.notes || '',
-    damage: g.damage || ''
-  }));
+  }).map((g) => {
+    const plan = getDefaultMaintenancePlan(g);
+    return {
+      id: g.id || crypto.randomUUID(),
+      name: g.name,
+      category: g.category || '其他',
+      owner: g.owner || '未知',
+      available: g.available || iso(0),
+      deposit: g.deposit !== undefined ? String(g.deposit) : '0',
+      status: g.status || '可借',
+      notes: g.notes || '',
+      damage: g.damage || '',
+      maintenanceCycleDays: plan.maintenanceCycleDays,
+      nextMaintenanceDate: plan.nextMaintenanceDate,
+      maintenanceReminderLevel: plan.maintenanceReminderLevel
+    };
+  });
   return { data, warnings };
 }
 

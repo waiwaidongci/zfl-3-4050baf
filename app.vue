@@ -6,6 +6,7 @@ import InventoryPanel from './components/InventoryPanel.vue';
 import SettlementPanel from './components/SettlementPanel.vue';
 import ReservationPanel from './components/ReservationPanel.vue';
 import { propagateMemberRename, cleanupDeletedTrip } from './utils/settlementTransform.js';
+import { normalizeGears } from './utils/dataTransform.js';
 import { useReservation } from './composables/useReservation.js';
 import { computeQueuePositions, expireOutdatedReservations, recalcAllPriorities } from './utils/reservationTransform.js';
 import { buildAllHealthInfoMap } from './composables/useEquipmentHealth.js';
@@ -55,9 +56,9 @@ function createDefaultMembers() {
 
 function createDefaultGears(ownerName = '阿岚', stoveOwner = '梁序', lampOwner = '小北') {
   return [
-    { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: ownerName, available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '' },
-    { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: stoveOwner, available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '' },
-    { id: crypto.randomUUID(), name: '营地灯三件组', category: '照明', owner: lampOwner, available: iso(3), deposit: '50', status: '可借', notes: '满电交接', damage: '' }
+    { id: crypto.randomUUID(), name: '双人轻量帐', category: '帐篷天幕', owner: ownerName, available: iso(1), deposit: '200', status: '可借', notes: '含地钉和防潮垫', damage: '', maintenanceCycleDays: 30, nextMaintenanceDate: iso(30), maintenanceReminderLevel: '标准' },
+    { id: crypto.randomUUID(), name: '炉头套装', category: '炊具', owner: stoveOwner, available: iso(0), deposit: '80', status: '借出中', notes: '需自备气罐', damage: '', maintenanceCycleDays: 15, nextMaintenanceDate: iso(15), maintenanceReminderLevel: '严格' },
+    { id: crypto.randomUUID(), name: '营地灯三件组', category: '照明', owner: lampOwner, available: iso(3), deposit: '50', status: '可借', notes: '满电交接', damage: '', maintenanceCycleDays: 60, nextMaintenanceDate: iso(60), maintenanceReminderLevel: '宽松' }
   ];
 }
 
@@ -272,12 +273,18 @@ function migrateOldDataToDefaultSpace() {
 
   try {
     const rawGears = localStorage.getItem('zfl-3-gears');
-    gears = rawGears ? safeParseJSON(rawGears, null) : null;
-    if (!gears || !Array.isArray(gears)) {
-      warnings.push('装备数据格式异常，已使用默认值');
-      gears = defaultGears;
+    if (rawGears) {
+      const parsedGears = safeParseJSON(rawGears, null);
+      if (parsedGears && Array.isArray(parsedGears)) {
+        const gearsResult = normalizeGears(parsedGears);
+        gears = gearsResult.data;
+        warnings.push(...gearsResult.warnings);
+      } else {
+        warnings.push('装备数据格式异常，已使用默认值');
+        gears = defaultGears;
+      }
     } else {
-      gears = gears.filter((g) => g && typeof g === 'object' && g.name);
+      gears = defaultGears;
     }
   } catch (e) {
     warnings.push('读取装备数据失败，已使用默认值');
@@ -626,7 +633,7 @@ const currentHealthGearId = ref('');
 const tab = ref('装备库');
 const category = ref('全部分类');
 const requestFilter = ref('全部申请');
-const form = ref({ name: '', category: '帐篷天幕', owner: '阿岚', available: iso(2), deposit: '100', status: '可借', notes: '' });
+const form = ref({ name: '', category: '帐篷天幕', owner: '阿岚', available: iso(2), deposit: '100', status: '可借', notes: '', maintenanceCycleDays: 30, nextMaintenanceDate: iso(30), maintenanceReminderLevel: '标准' });
 const requestForm = ref({ gearId: '', borrower: '梁序', start: iso(2), end: iso(4), reason: '' });
 
 const memberForm = ref({ nickname: '', phone: '', area: '', notes: '' });
@@ -1413,7 +1420,7 @@ function removeTripGear(gearId) {
 function addGear() {
   if (!form.value.name.trim()) return;
   gears.value = [{ id: crypto.randomUUID(), ...form.value, damage: '' }, ...gears.value];
-  form.value = { name: '', category: '帐篷天幕', owner: currentUser.value, available: iso(2), deposit: '100', status: '可借', notes: '' };
+  form.value = { name: '', category: '帐篷天幕', owner: currentUser.value, available: iso(2), deposit: '100', status: '可借', notes: '', maintenanceCycleDays: 30, nextMaintenanceDate: iso(30), maintenanceReminderLevel: '标准' };
 }
 
 const editingDraftId = ref(null);
@@ -1665,6 +1672,38 @@ function addMaintenance() {
     handler
   }, ...maintenanceRecords.value];
   maintenanceForm.value = { gearId: '', date: iso(0), type: '清洁', description: '', handler: '' };
+}
+
+function handleCreateMaintenanceFromProfile({ gearId, type }) {
+  const gear = gears.value.find((g) => g.id === gearId);
+  if (!gear) return;
+  if (gear.owner !== currentUser.value) {
+    alert('仅装备主人可登记保养记录');
+    return;
+  }
+  const cycle = Number(gear.maintenanceCycleDays) || 30;
+  const nextDate = iso(cycle);
+  const handler = currentUser.value;
+  const description = `根据保养计划执行的${type}保养，周期${cycle}天。`;
+
+  maintenanceRecords.value = [{
+    id: crypto.randomUUID(),
+    gearId: gear.id,
+    gearName: gear.name,
+    owner: gear.owner,
+    date: iso(0),
+    type: type || '检查',
+    description,
+    handler
+  }, ...maintenanceRecords.value];
+
+  gears.value = gears.value.map((g) =>
+    g.id === gear.id
+      ? { ...g, nextMaintenanceDate: nextDate }
+      : g
+  );
+
+  alert(`已为「${gear.name}」创建保养记录，下次保养日期自动更新为 ${nextDate}`);
 }
 
 function deleteMaintenance(id) {
@@ -1997,6 +2036,27 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
           <input v-model="form.available" type="date" />
           <input v-model="form.deposit" placeholder="押金" />
         </div>
+        <div class="form-section">
+          <h4 style="margin: 0 0 8px; color: #3a3730; font-size: 14px;">🔧 保养计划</h4>
+          <div class="split">
+            <div>
+              <label class="muted" style="font-size: 12px;">保养周期（天）</label>
+              <input v-model.number="form.maintenanceCycleDays" type="number" min="1" placeholder="30" />
+            </div>
+            <div>
+              <label class="muted" style="font-size: 12px;">下次保养日期</label>
+              <input v-model="form.nextMaintenanceDate" type="date" />
+            </div>
+          </div>
+          <div>
+            <label class="muted" style="font-size: 12px;">提醒级别</label>
+            <select v-model="form.maintenanceReminderLevel">
+              <option value="宽松">宽松（提前7天提醒）</option>
+              <option value="标准">标准（提前14天提醒）</option>
+              <option value="严格">严格（提前30天提醒）</option>
+            </select>
+          </div>
+        </div>
         <textarea v-model="form.notes" placeholder="使用注意事项"></textarea>
         <button>保存装备</button>
       </form>
@@ -2014,8 +2074,20 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
             <span>{{ gear.category }} · {{ gear.owner }}</span>
             <p>{{ gear.status }} · 可借日期{{ gear.available }} · 押金{{ gear.deposit }}</p>
             <small>{{ gear.notes }}</small>
-            <div v-if="lastMaintenanceByGear[gear.id]" class="maintenance-badge" style="margin-top: 10px; padding: 8px 10px; background: #edf1e8; border-radius: 6px; font-size: 12px;">
-              <span style="color: #2f4a2c; font-weight: 600;">最近保养：</span>
+            <div v-if="healthInfoMap[gear.id]?.maintenancePlanStatus"
+                 :class="['maintenance-badge', {
+                   'plan-overdue': healthInfoMap[gear.id].maintenancePlanStatus.status === 'overdue',
+                   'plan-upcoming': healthInfoMap[gear.id].maintenancePlanStatus.status === 'upcoming'
+                 }]"
+                 style="margin-top: 10px; padding: 8px 10px; background: #edf1e8; border-radius: 6px; font-size: 12px;">
+              <span style="color: #2f4a2c; font-weight: 600;">📅 保养计划：</span>
+              <span>{{ healthInfoMap[gear.id].maintenancePlanStatus.nextDate }} · {{ healthInfoMap[gear.id].maintenancePlanStatus.label }}</span>
+              <div style="margin-top: 4px; color: #63705d;">
+                周期：{{ healthInfoMap[gear.id].maintenancePlanStatus.cycle }}天 · 提醒：{{ healthInfoMap[gear.id].maintenancePlanStatus.reminderLevel }}
+              </div>
+            </div>
+            <div v-if="lastMaintenanceByGear[gear.id]" class="maintenance-badge" style="margin-top: 8px; padding: 8px 10px; background: #f5f3e8; border-radius: 6px; font-size: 12px;">
+              <span style="color: #6b5a2a; font-weight: 600;">最近保养：</span>
               <span>{{ lastMaintenanceByGear[gear.id].date }} · {{ lastMaintenanceByGear[gear.id].type }}</span>
               <div v-if="lastMaintenanceByGear[gear.id].description" style="margin-top: 4px; color: #63705d;">
                 {{ lastMaintenanceByGear[gear.id].description }}
@@ -2708,6 +2780,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
           :maintenanceRecords="maintenanceRecords"
           :depositRecords="depositRecords"
           @close="closeHealthProfile"
+          @create-maintenance="handleCreateMaintenanceFromProfile"
         />
       </div>
     </div>
@@ -2754,6 +2827,32 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
 
 .gear-card {
   position: relative;
+}
+
+.maintenance-badge.plan-overdue {
+  background: #fff6f4 !important;
+  border: 1px solid #f5c8bf;
+}
+
+.maintenance-badge.plan-overdue span:first-child {
+  color: #b02a2a !important;
+}
+
+.maintenance-badge.plan-upcoming {
+  background: #fffaf2 !important;
+  border: 1px solid #f0d5b0;
+}
+
+.maintenance-badge.plan-upcoming span:first-child {
+  color: #8a5a2a !important;
+}
+
+.form-section {
+  margin: 12px 0;
+  padding: 12px;
+  background: #faf9f4;
+  border-radius: 8px;
+  border: 1px solid #ece8d8;
 }
 
 .health-profile-btn {

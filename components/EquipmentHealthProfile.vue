@@ -81,6 +81,21 @@
             </div>
             <div class="stat-label">最近一次保养</div>
           </div>
+          <div class="stat-card" :class="{ 'plan-overdue': maintenancePlanStatus?.status === 'overdue', 'plan-upcoming': maintenancePlanStatus?.status === 'upcoming' }">
+            <div class="stat-num">
+              <template v-if="maintenancePlanStatus?.nextDate">
+                {{ maintenancePlanStatus.nextDate }}
+                <div class="stat-sub" :class="maintenancePlanStatus.status === 'overdue' ? 'danger' : maintenancePlanStatus.status === 'upcoming' ? 'warning' : 'muted'">
+                  {{ maintenancePlanStatus.label }} · {{ maintenancePlanStatus.cycle }}天周期 · {{ maintenancePlanStatus.reminderLevel }}
+                </div>
+              </template>
+              <template v-else>
+                <span class="muted">未设置</span>
+                <div class="stat-sub muted">可在装备编辑中设置</div>
+              </template>
+            </div>
+            <div class="stat-label">下次保养计划</div>
+          </div>
           <div class="stat-card">
             <div class="stat-num">{{ damageCount }}<span class="stat-unit muted">次</span></div>
             <div class="stat-label">历史损耗记录</div>
@@ -111,6 +126,13 @@
             <div class="action-body">
               <div class="action-title">{{ action.title }}</div>
               <p class="action-desc muted">{{ action.description }}</p>
+              <button
+                v-if="action.canCreateMaintenance"
+                class="btn-create-maintenance"
+                @click="$emit('create-maintenance', { gearId: gear.id, type: action.maintenanceType })"
+              >
+                🛠️ 创建保养记录
+              </button>
             </div>
           </div>
         </div>
@@ -181,7 +203,7 @@ const props = defineProps({
   }
 });
 
-defineEmits(['close']);
+defineEmits(['close', 'create-maintenance']);
 
 const gearIdRef = computed(() => props.gearId);
 
@@ -190,6 +212,7 @@ const {
   borrowCount,
   lastMaintenance,
   daysSinceLastMaintenance,
+  maintenancePlanStatus,
   damageCount,
   depositDeductCount,
   depositDeductTotal,
@@ -488,6 +511,43 @@ function getCategoryIcon(category) {
   font-size: 12px;
   color: #6b6455;
   margin-top: 4px;
+}
+
+.stat-card.plan-overdue {
+  border-color: #f5c8bf;
+  background: #fff6f4;
+}
+
+.stat-card.plan-upcoming {
+  border-color: #f0d5b0;
+  background: #fffaf2;
+}
+
+.stat-sub.danger {
+  color: #b02a2a;
+  font-weight: 600;
+}
+
+.stat-sub.warning {
+  color: #8a5a2a;
+  font-weight: 600;
+}
+
+.btn-create-maintenance {
+  margin-top: 10px;
+  padding: 6px 14px;
+  font-size: 12px;
+  background: #2f4a2c;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.btn-create-maintenance:hover {
+  background: #3d5c37;
 }
 
 .action-list {
