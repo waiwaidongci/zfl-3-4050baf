@@ -668,16 +668,19 @@ const conflictDetails = ref([]);
 const reservationShortcut = ref({ gearId: '', start: '', end: '' });
 
 const sceneOptions = ['湖畔露营', '山地露营', '家庭亲子', '徒步露营', '沙滩露营', '冬季露营'];
+const weatherOptions = ['晴朗', '多云', '小雨', '大风', '高温', '寒冷'];
 const recommendScene = ref('湖畔露营');
+const recommendWeather = ref('晴朗');
 const recommendPeople = ref(2);
 const recommendDays = ref(2);
 const recommendationResult = ref({});
 const gapList = ref([]);
 const hasRecommended = ref(false);
 const selectedRecommendGears = ref([]);
-const recommendBorrower = ref(currentUser.value);
+const recommendMembers = ref([currentUser.value]);
 const recommendStart = ref(iso(2));
 const recommendEnd = ref(iso(4));
+const travelPlanWaitlistGears = ref([]);
 
 const handoverFilter = ref('全部交接单');
 const handoverTypeFilter = ref('全部类型');
@@ -1784,7 +1787,7 @@ function deleteMaintenance(id) {
 
 const recommendCategories = ['帐篷天幕', '炊具', '照明', '桌椅收纳', '安全急救'];
 
-function getCategoryRequirements(scene, people, days) {
+function getCategoryRequirements(scene, people, days, weather) {
   const tentCount = Math.ceil(people / 3);
   const lightCount = Math.max(1, Math.ceil(people / 2));
   const tableCount = Math.ceil(people / 4);
@@ -1824,34 +1827,88 @@ function getCategoryRequirements(scene, people, days) {
     base['桌椅收纳'] += 2;
   }
 
+  if (weather === '小雨') {
+    base['帐篷天幕'] += 1;
+    base['安全急救'] += 1;
+  }
+  if (weather === '大风') {
+    base['帐篷天幕'] += 1;
+    base['桌椅收纳'] += 1;
+  }
+  if (weather === '高温') {
+    base['照明'] += 1;
+    base['安全急救'] += 1;
+  }
+  if (weather === '寒冷') {
+    base['炊具'] += 1;
+    base['安全急救'] += 1;
+  }
+
   return base;
 }
 
+function scoreGearForRecommendation(gear, start, end) {
+  let score = 0;
+  const isBorrowable = gear.status === '可借';
+  if (isBorrowable) score += 50;
+
+  const conflicts = findConflictingRequests(gear.id, start, end);
+  const conflictCount = conflicts.length;
+  if (conflictCount === 0) score += 30;
+  else score -= Math.min(conflictCount * 10, 20);
+
+  const reservationCount = reservationHelper.getGearReservationCount(gear.id);
+  score -= Math.min(reservationCount * 5, 15);
+
+  const hasNotes = gear.notes && gear.notes.trim().length > 0;
+  if (hasNotes) score += 5;
+
+  return score;
+}
+
 function generateRecommendation() {
-  const availableGears = gears.value.filter((g) => g.status === '可借');
-  const requirements = getCategoryRequirements(recommendScene.value, recommendPeople.value, recommendDays.value);
+  const start = recommendStart.value;
+  const end = recommendEnd.value;
+  const requirements = getCategoryRequirements(
+    recommendScene.value,
+    recommendPeople.value,
+    recommendDays.value,
+    recommendWeather.value
+  );
   const result = {};
   const gaps = [];
 
   for (const category of recommendCategories) {
     const needed = requirements[category] || 0;
-    const categoryGears = availableGears.filter((g) => g.category === category);
-    const recommended = categoryGears.slice(0, needed);
-    const shortfall = needed - recommended.length;
+    const categoryGears = gears.value.filter((g) => g.category === category);
+    const scoredGears = categoryGears
+      .map((gear) => ({
+        gear,
+        score: scoreGearForRecommendation(gear, start, end)
+      }))
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.gear);
+
+    const recommended = scoredGears.slice(0, needed);
+    const borrowableCount = categoryGears.filter((g) => g.status === '可借').length;
+    const shortfall = needed - recommended.filter((g) => g.status === '可借').length;
 
     result[category] = {
       needed,
-      available: categoryGears.length,
+      available: borrowableCount,
+      totalInCategory: categoryGears.length,
       recommended,
-      shortfall
+      shortfall: Math.max(0, shortfall),
+      waitlistCandidates: scoredGears.slice(needed).filter((g) => g.status !== '可借' || findConflictingRequests(g.id, start, end).length > 0)
     };
 
     if (shortfall > 0) {
       gaps.push({
         category,
         needed,
-        available: categoryGears.length,
-        shortfall
+        available: borrowableCount,
+        shortfall,
+        waitlistEligible: scoredGears.filter((g) => g.status !== '可借').length
       });
     }
   }
@@ -1860,6 +1917,7 @@ function generateRecommendation() {
   gapList.value = gaps;
   hasRecommended.value = true;
   selectedRecommendGears.value = [];
+  travelPlanWaitlistGears.value = [];
   travelPlanResult.value = null;
 
   for (const category of recommendCategories) {
@@ -1888,13 +1946,23 @@ function getSelectedRecommendGearsCount() {
   return selectedRecommendGears.value.length;
 }
 
+function toggleRecommendMember(nickname) {
+  const idx = recommendMembers.value.indexOf(nickname);
+  if (idx > -1) {
+    recommendMembers.value.splice(idx, 1);
+  } else {
+    recommendMembers.value.push(nickname);
+  }
+}
+
 function addRecommendationToRequests() {
   if (selectedRecommendGears.value.length === 0) {
     alert('请至少选择一件装备');
     return;
   }
-  if (!recommendBorrower.value) {
-    alert('请选择借用人');
+  const members = getEffectiveMembers();
+  if (members.length === 0) {
+    alert('请选择至少一位借用人');
     return;
   }
   if (!recommendStart.value || !recommendEnd.value) {
@@ -1906,14 +1974,20 @@ function addRecommendationToRequests() {
     return;
   }
 
+  const primaryBorrower = members[0];
   let addedCount = 0;
+  let skippedCount = 0;
+
   for (const gearId of selectedRecommendGears.value) {
     const gear = gears.value.find((g) => g.id === gearId);
-    if (!gear || gear.status !== '可借') continue;
+    if (!gear || gear.status !== '可借') {
+      skippedCount++;
+      continue;
+    }
 
     const conflicts = findConflictingRequests(gear.id, recommendStart.value, recommendEnd.value);
     if (conflicts.length > 0) {
-      alert(`装备「${gear.name}」在所选日期范围内存在冲突，已跳过`);
+      skippedCount++;
       continue;
     }
 
@@ -1922,21 +1996,22 @@ function addRecommendationToRequests() {
       gearId: gear.id,
       gearName: gear.name,
       owner: gear.owner,
-      borrower: recommendBorrower.value,
+      borrower: primaryBorrower,
       start: recommendStart.value,
       end: recommendEnd.value,
       status: '草稿',
       damage: '',
-      reason: `${recommendScene.value}·${recommendPeople.value}人·${recommendDays.value}天 套装推荐`
+      reason: `${recommendScene.value}·${recommendWeather.value}·${recommendPeople.value}人·${recommendDays.value}天 套装推荐`
     }, ...requests.value];
     addedCount++;
   }
 
   if (addedCount > 0) {
-    alert(`已成功保存 ${addedCount} 条借用申请草稿，请前往申请列表提交`);
+    const skipMsg = skippedCount > 0 ? `，跳过 ${skippedCount} 件不可借或冲突装备` : '';
+    alert(`已成功保存 ${addedCount} 条借用申请草稿${skipMsg}，请前往申请列表提交`);
     tab.value = '申请列表';
   } else {
-    alert('没有可添加的装备');
+    alert('没有可添加的可借装备，建议使用「一键生成出行方案」自动加入候补预约');
   }
 }
 
@@ -1966,13 +2041,21 @@ function refreshRecommendAvailability() {
 
 const travelPlanResult = ref(null);
 
+function getEffectiveMembers() {
+  if (recommendMembers.value && recommendMembers.value.length > 0) {
+    return recommendMembers.value;
+  }
+  return currentUser.value ? [currentUser.value] : [];
+}
+
 function generateTravelPlanFromRecommendation() {
   if (selectedRecommendGears.value.length === 0) {
     alert('请至少选择一件装备');
     return;
   }
-  if (!recommendBorrower.value) {
-    alert('请选择借用人');
+  const members = getEffectiveMembers();
+  if (members.length === 0) {
+    alert('请选择至少一位出行成员');
     return;
   }
   if (!recommendStart.value || !recommendEnd.value) {
@@ -1984,9 +2067,11 @@ function generateTravelPlanFromRecommendation() {
     return;
   }
 
+  const primaryBorrower = members[0];
   const planGears = [];
   const planRequests = [];
   const planReservations = [];
+  const waitlistGears = [];
   const duplicateTracker = new Map();
 
   for (const gearId of selectedRecommendGears.value) {
@@ -2001,6 +2086,9 @@ function generateTravelPlanFromRecommendation() {
     duplicateTracker.set(nameKey, { gearId });
 
     const avail = getRecommendGearAvailability(gearId, recommendStart.value, recommendEnd.value);
+    const queuePosition = avail.status !== 'available'
+      ? reservationHelper.getQueueForGear(gearId).length + 1
+      : 0;
 
     const planGearItem = {
       gearId: gear.id,
@@ -2010,23 +2098,28 @@ function generateTravelPlanFromRecommendation() {
       status: avail.status === 'available' ? '待借' : '待确认',
       availability: avail.status,
       conflictReason: avail.reason,
-      borrower: recommendBorrower.value
+      borrower: primaryBorrower,
+      queuePosition,
+      members: [...members]
     };
 
     if (avail.status === 'available') {
       planGearItem.status = '待借';
+      const requestId = crypto.randomUUID();
       planRequests.push({
-        id: crypto.randomUUID(),
+        id: requestId,
         gearId: gear.id,
         gearName: gear.name,
         owner: gear.owner,
-        borrower: recommendBorrower.value,
+        borrower: primaryBorrower,
         start: recommendStart.value,
         end: recommendEnd.value,
         status: '草稿',
         damage: '',
-        reason: `${recommendScene.value}·${recommendPeople.value}人·${recommendDays.value}天 出行方案`
+        reason: `${recommendScene.value}·${recommendWeather.value}·${recommendPeople.value}人·${recommendDays.value}天 出行方案`,
+        tripId: ''
       });
+      planGearItem.requestId = requestId;
     } else if (avail.status === 'conflict') {
       planGearItem.status = '待确认';
       planGearItem.conflictDetails = avail.conflicts.map((c) => ({
@@ -2035,42 +2128,69 @@ function generateTravelPlanFromRecommendation() {
         end: c.end,
         status: c.status
       }));
-      planReservations.push({
+      const newRes = reservationHelper.addReservation({
         gearId: gear.id,
-        gearName: gear.name,
-        owner: gear.owner,
-        borrower: recommendBorrower.value,
+        borrower: primaryBorrower,
         start: recommendStart.value,
         end: recommendEnd.value,
         reason: '日期冲突',
-        source: '出行方案'
+        notes: `来自出行方案：${recommendScene.value}`
       });
-    } else {
-      planGearItem.status = '待确认';
-      planReservations.push({
+      if (newRes) {
+        planReservations.push(newRes);
+        planGearItem.reservationId = newRes.id;
+      }
+      waitlistGears.push({
         gearId: gear.id,
         gearName: gear.name,
         owner: gear.owner,
-        borrower: recommendBorrower.value,
+        reason: '日期冲突',
+        queuePosition,
+        conflicts: avail.conflicts
+      });
+    } else {
+      planGearItem.status = '待确认';
+      const newRes = reservationHelper.addReservation({
+        gearId: gear.id,
+        borrower: primaryBorrower,
         start: recommendStart.value,
         end: recommendEnd.value,
         reason: avail.reason === '借出中' ? '装备借出中' : `装备${avail.reason}`,
-        source: '出行方案'
+        notes: `来自出行方案：${recommendScene.value}`
+      });
+      if (newRes) {
+        planReservations.push(newRes);
+        planGearItem.reservationId = newRes.id;
+      }
+      waitlistGears.push({
+        gearId: gear.id,
+        gearName: gear.name,
+        owner: gear.owner,
+        reason: avail.reason,
+        queuePosition
       });
     }
 
     planGears.push(planGearItem);
   }
 
+  const tripId = crypto.randomUUID();
   const newTrip = {
-    id: crypto.randomUUID(),
+    id: tripId,
     destination: `${recommendScene.value}出行方案`,
     startDate: recommendStart.value,
-    members: [recommendBorrower.value],
+    endDate: recommendEnd.value,
+    members: [...members],
     gears: planGears,
-    notes: `${recommendScene.value}·${recommendPeople.value}人·${recommendDays.value}天，由装备推荐一键生成`,
-    planSource: 'recommendation'
+    notes: `${recommendScene.value}·${recommendWeather.value}·${recommendPeople.value}人·${recommendDays.value}天，由装备推荐一键生成`,
+    planSource: 'recommendation',
+    weather: recommendWeather.value,
+    waitlistGears
   };
+
+  for (const req of planRequests) {
+    req.tripId = tripId;
+  }
 
   trips.value = [newTrip, ...trips.value];
 
@@ -2078,37 +2198,36 @@ function generateTravelPlanFromRecommendation() {
     requests.value = [req, ...requests.value];
   }
 
-  for (const resData of planReservations) {
-    const newRes = reservationHelper.addReservation({
-      gearId: resData.gearId,
-      borrower: resData.borrower,
-      start: resData.start,
-      end: resData.end,
-      reason: resData.reason,
-      notes: `来自出行方案：${recommendScene.value}`
-    });
-    if (newRes) {
-      reservations.value = [newRes, ...reservations.value];
-    }
+  for (const res of planReservations) {
+    reservations.value = [res, ...reservations.value];
   }
+
+  travelPlanWaitlistGears.value = waitlistGears;
 
   const availableCount = planGears.filter((g) => g.availability === 'available').length;
   const conflictCount = planGears.filter((g) => g.availability === 'conflict').length;
   const unavailableCount = planGears.filter((g) => g.availability === 'unavailable').length;
+  const totalDeposit = planGears.reduce((sum, g) => sum + (parseFloat(g.deposit) || 0), 0);
 
   travelPlanResult.value = {
     tripId: newTrip.id,
     destination: newTrip.destination,
     startDate: newTrip.startDate,
+    endDate: newTrip.endDate,
+    members: [...members],
     totalGears: planGears.length,
     availableCount,
     conflictCount,
     unavailableCount,
     requestCount: planRequests.length,
-    reservationCount: planReservations.length
+    reservationCount: planReservations.length,
+    waitlistCount: waitlistGears.length,
+    totalDeposit: totalDeposit.toFixed(2),
+    weather: recommendWeather.value
   };
 
   selectedTripId.value = newTrip.id;
+  triggerReservationCheck();
 }
 
 function goToTravelPlan() {
@@ -2134,7 +2253,9 @@ watch([recommendStart, recommendEnd, hasRecommended], () => {
 });
 
 watch(currentUser, (newVal) => {
-  recommendBorrower.value = newVal;
+  if (newVal && (!recommendMembers.value || recommendMembers.value.length === 0)) {
+    recommendMembers.value = [newVal];
+  }
 });
 
 function dismissMigrationWarning() {
@@ -2397,21 +2518,29 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
         <select v-model="recommendScene">
           <option v-for="scene in sceneOptions" :key="scene">{{ scene }}</option>
         </select>
+        <label class="muted">天气状况</label>
+        <select v-model="recommendWeather">
+          <option v-for="weather in weatherOptions" :key="weather">{{ weather }}</option>
+        </select>
         <label class="muted">参与人数</label>
         <input v-model.number="recommendPeople" type="number" min="1" max="20" />
         <label class="muted">露营天数</label>
         <input v-model.number="recommendDays" type="number" min="1" max="30" />
-        <label class="muted">借用人</label>
-        <select v-model="recommendBorrower">
-          <option v-for="member in members" :key="member.id">{{ member.nickname }}</option>
-        </select>
+        <label class="muted">出行成员</label>
+        <div class="member-select">
+          <label v-for="member in members" :key="member.id" class="member-chip">
+            <input type="checkbox" :checked="recommendMembers.includes(member.nickname)" @change="toggleRecommendMember(member.nickname)" />
+            <span>{{ member.nickname }}</span>
+          </label>
+        </div>
+        <small class="muted member-hint">主借用人为第一位选中成员</small>
         <label class="muted">借用起止日期</label>
         <div class="split">
           <input v-model="recommendStart" type="date" />
           <input v-model="recommendEnd" type="date" />
         </div>
         <button>生成推荐</button>
-        <small class="muted">系统将根据场景、人数、天数智能推荐装备，并自动避开借出中装备。</small>
+        <small class="muted">系统将根据场景、天气、人数、天数智能推荐装备，并优先匹配日期不冲突的装备。</small>
       </form>
 
       <div class="panel wide">
@@ -2440,8 +2569,11 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
             <div class="travel-plan-body">
               <div class="travel-plan-info">
                 <span>📋 {{ travelPlanResult.destination }}</span>
-                <span>📅 {{ travelPlanResult.startDate }}</span>
+                <span>🌤 {{ travelPlanResult.weather }}</span>
+                <span>📅 {{ travelPlanResult.startDate }} ~ {{ travelPlanResult.endDate }}</span>
+                <span>👥 {{ travelPlanResult.members.join('、') }}</span>
                 <span>🎒 共 {{ travelPlanResult.totalGears }} 件装备</span>
+                <span>💰 预计押金 ¥{{ travelPlanResult.totalDeposit }}</span>
               </div>
               <div class="travel-plan-stats">
                 <div class="plan-stat available">
@@ -2461,14 +2593,30 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
                   <span class="plan-stat-label">申请草稿</span>
                 </div>
                 <div class="plan-stat reservations">
-                  <span class="plan-stat-value">{{ travelPlanResult.reservationCount }}</span>
-                  <span class="plan-stat-label">候补预约</span>
+                  <span class="plan-stat-value">{{ travelPlanResult.waitlistCount }}</span>
+                  <span class="plan-stat-label">候补排队</span>
                 </div>
               </div>
+
+              <div v-if="travelPlanWaitlistGears.length > 0" class="waitlist-section">
+                <div class="waitlist-header">
+                  <strong>📝 候补清单</strong>
+                  <span class="muted">以下装备已自动加入候补预约队列</span>
+                </div>
+                <div class="waitlist-list">
+                  <div v-for="item in travelPlanWaitlistGears" :key="item.gearId" class="waitlist-item">
+                    <span class="waitlist-gear">{{ item.gearName }}</span>
+                    <span class="waitlist-owner muted">{{ item.owner }}</span>
+                    <span class="waitlist-reason">{{ item.reason }}</span>
+                    <span class="waitlist-position">#{{ item.queuePosition }}</span>
+                  </div>
+                </div>
+              </div>
+
               <div class="travel-plan-actions">
                 <button @click="goToTravelPlan">查看出行清单</button>
                 <button v-if="travelPlanResult.requestCount > 0" class="ghost" @click="goToRequestsFromPlan">前往申请列表</button>
-                <button v-if="travelPlanResult.reservationCount > 0" class="ghost" @click="goToReservationsFromPlan">前往预约排程</button>
+                <button v-if="travelPlanResult.waitlistCount > 0" class="ghost" @click="goToReservationsFromPlan">前往预约排程</button>
               </div>
             </div>
           </div>
@@ -3425,5 +3573,105 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
 .reserve-hint:hover {
   background: #d1c0e8;
   text-decoration: underline;
+}
+
+.member-select {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.member-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: #f5f9f0;
+  border: 1px solid #d0d8c5;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #3a4a35;
+  transition: all 0.15s;
+  user-select: none;
+}
+
+.member-chip:hover {
+  background: #e6f0e2;
+  border-color: #b5c9a8;
+}
+
+.member-chip input[type="checkbox"] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  accent-color: #4a7d44;
+}
+
+.member-hint {
+  margin-top: -4px;
+  margin-bottom: 12px;
+  display: block;
+  font-size: 11px;
+}
+
+.waitlist-section {
+  margin: 14px 0;
+  padding: 12px;
+  background: #f9f5ff;
+  border: 1px solid #d9c8f0;
+  border-radius: 8px;
+}
+
+.waitlist-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  color: #5b3a8c;
+  font-size: 14px;
+}
+
+.waitlist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.waitlist-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.waitlist-gear {
+  font-weight: 600;
+  color: #3a2c5a;
+  min-width: 100px;
+}
+
+.waitlist-owner {
+  font-size: 12px;
+  min-width: 60px;
+}
+
+.waitlist-reason {
+  flex: 1;
+  font-size: 12px;
+  color: #6b5b8a;
+}
+
+.waitlist-position {
+  padding: 2px 8px;
+  background: #e2d5f1;
+  color: #5b3a8c;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
 }
 </style>
