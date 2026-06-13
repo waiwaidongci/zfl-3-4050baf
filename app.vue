@@ -3174,6 +3174,7 @@ function clearTimelineContext() {
 }
 
 function viewGearTimeline(gearId) {
+  closeHealthProfile();
   navigateToTimeline({
     gearId
   });
