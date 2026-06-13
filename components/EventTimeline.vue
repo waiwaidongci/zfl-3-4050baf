@@ -116,11 +116,19 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, toRef } from 'vue';
 import { EVENT_ENTITY_TYPES, EVENT_ACTIONS, useEventLog } from '../composables/useEventLog.js';
 
 const props = defineProps({
   eventLogs: {
+    type: Array,
+    default: () => []
+  },
+  members: {
+    type: Array,
+    default: () => []
+  },
+  gears: {
     type: Array,
     default: () => []
   },
@@ -139,42 +147,65 @@ const selectedActor = ref('');
 const searchText = ref('');
 const displayCount = ref(PAGE_SIZE);
 
-const eventLogRef = computed(() => ({ value: props.eventLogs || [] }));
-const currentUserRef = computed(() => props.currentUser);
+const eventLogsRef = toRef(props, 'eventLogs');
+const currentUserRef = toRef(props, 'currentUser');
+
+const safeEventLogs = computed(() => {
+  const val = eventLogsRef.value;
+  if (Array.isArray(val)) return val;
+  if (val && typeof val === 'object' && Array.isArray(val.value)) return val.value;
+  return [];
+});
+
+const eventLogWrapper = computed({
+  get: () => safeEventLogs.value,
+  set: (val) => {}
+});
 
 const { filterEvents, getEventStats } = useEventLog({
-  eventLogs: eventLogRef,
+  eventLogs: eventLogWrapper,
   currentUser: currentUserRef
 });
 
-const stats = computed(() => getEventStats());
+const stats = computed(() => {
+  try {
+    return getEventStats() || { total: 0, byEntity: {}, byAction: {}, byActor: {} };
+  } catch (e) {
+    console.warn('获取事件统计失败:', e);
+    return { total: 0, byEntity: {}, byAction: {}, byActor: {} };
+  }
+});
 
 const entityTypeOptions = EVENT_ENTITY_TYPES;
 
 const actorOptions = computed(() => {
   const actors = new Set();
-  for (const e of props.eventLogs || []) {
-    if (e.actor) actors.add(e.actor);
+  const logs = safeEventLogs.value;
+  for (const e of logs) {
+    if (e && e.actor && typeof e.actor === 'string') actors.add(e.actor);
   }
   return Array.from(actors).sort();
 });
 
+const allFilteredEvents = computed(() => {
+  try {
+    return filterEvents({
+      entityTypes: selectedEntityTypes.value.length > 0 ? selectedEntityTypes.value : [],
+      actor: selectedActor.value,
+      searchText: searchText.value
+    });
+  } catch (e) {
+    console.warn('筛选事件失败:', e);
+    return [];
+  }
+});
+
 const filteredEvents = computed(() => {
-  const result = filterEvents({
-    entityTypes: selectedEntityTypes.value.length > 0 ? selectedEntityTypes.value : [],
-    actor: selectedActor.value,
-    searchText: searchText.value
-  });
-  return result.slice(0, displayCount.value);
+  return allFilteredEvents.value.slice(0, displayCount.value);
 });
 
 const hasMore = computed(() => {
-  const all = filterEvents({
-    entityTypes: selectedEntityTypes.value.length > 0 ? selectedEntityTypes.value : [],
-    actor: selectedActor.value,
-    searchText: searchText.value
-  });
-  return all.length > displayCount.value;
+  return allFilteredEvents.value.length > displayCount.value;
 });
 
 function toggleEntityType(type) {

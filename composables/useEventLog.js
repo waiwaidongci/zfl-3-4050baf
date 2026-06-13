@@ -148,36 +148,73 @@ export function getFieldLabels(entityType) {
 }
 
 export function recordEvent(eventLogsRef, { entityType, entityId, entityName, action, actor, beforeState = null, afterState = null, sourcePage = '', notes = '', relatedEntityType = '', relatedEntityId = '', relatedEntityName = '', customChanges = null }) {
-  if (!eventLogsRef) return null;
+  if (!eventLogsRef) {
+    console.warn('recordEvent: eventLogsRef 为空');
+    return null;
+  }
+  if (!entityType || !action) {
+    console.warn('recordEvent: 缺少必填参数 entityType 或 action');
+    return null;
+  }
 
-  const summaryFields = getSummaryFields(entityType);
-  const fieldLabels = getFieldLabels(entityType);
+  let summaryFields = [];
+  let fieldLabels = {};
+  try {
+    summaryFields = getSummaryFields(entityType);
+    fieldLabels = getFieldLabels(entityType);
+  } catch (e) {
+    console.warn('获取摘要字段失败:', e);
+  }
 
-  const beforeSummary = beforeState ? shallowPick(beforeState, summaryFields) : null;
-  const afterSummary = afterState ? shallowPick(afterState, summaryFields) : null;
+  let beforeSummary = null;
+  let afterSummary = null;
+  try {
+    beforeSummary = beforeState ? shallowPick(beforeState, summaryFields) : null;
+    afterSummary = afterState ? shallowPick(afterState, summaryFields) : null;
+  } catch (e) {
+    console.warn('生成状态摘要失败:', e);
+  }
 
-  const changes = customChanges !== null
-    ? customChanges
-    : computeChanges(beforeSummary, afterSummary, fieldLabels);
+  let changes = [];
+  try {
+    changes = customChanges !== null && Array.isArray(customChanges)
+      ? customChanges
+      : computeChanges(beforeSummary, afterSummary, fieldLabels);
+  } catch (e) {
+    console.warn('计算变更差异失败:', e);
+    changes = [];
+  }
 
   const event = createEvent({
     entityType,
-    entityId,
-    entityName,
+    entityId: entityId || '',
+    entityName: entityName || '',
     action,
-    actor,
+    actor: actor || '',
     beforeState: beforeSummary ? summarizeObject(beforeSummary) : '',
     afterState: afterSummary ? summarizeObject(afterSummary) : '',
-    changes,
-    sourcePage,
-    notes,
-    relatedEntityType,
-    relatedEntityId,
-    relatedEntityName
+    changes: Array.isArray(changes) ? changes : [],
+    sourcePage: sourcePage || '',
+    notes: notes || '',
+    relatedEntityType: relatedEntityType || '',
+    relatedEntityId: relatedEntityId || '',
+    relatedEntityName: relatedEntityName || ''
   });
 
-  if (Array.isArray(eventLogsRef.value)) {
-    eventLogsRef.value = [event, ...eventLogsRef.value];
+  try {
+    if (eventLogsRef && typeof eventLogsRef === 'object') {
+      if (Array.isArray(eventLogsRef.value)) {
+        eventLogsRef.value = [event, ...eventLogsRef.value];
+      } else if (eventLogsRef.value && Array.isArray(eventLogsRef.value.value)) {
+        eventLogsRef.value.value = [event, ...eventLogsRef.value.value];
+      } else {
+        console.warn('recordEvent: 无法写入 eventLogs，无法识别的结构');
+        return event;
+      }
+    }
+  } catch (e) {
+    console.warn('写入事件日志失败:', e);
+    return event;
   }
 
   return event;
@@ -186,92 +223,122 @@ export function recordEvent(eventLogsRef, { entityType, entityId, entityName, ac
 export function useEventLog({ eventLogs, currentUser }) {
   const logs = eventLogs;
 
+  function getSafeLogs() {
+    if (!logs) return [];
+    let val;
+    try {
+      val = logs.value;
+    } catch (e) {
+      console.warn('访问 eventLogs.value 失败:', e);
+      return [];
+    }
+    if (Array.isArray(val)) {
+      return val.filter((e) => e && typeof e === 'object');
+    }
+    if (val && typeof val === 'object') {
+      if (Array.isArray(val.value)) {
+        return val.value.filter((e) => e && typeof e === 'object');
+      }
+      if (Array.isArray(val.eventLogs)) {
+        return val.eventLogs.filter((e) => e && typeof e === 'object');
+      }
+    }
+    return [];
+  }
+
   function record(params) {
-    const actor = currentUser?.value || '';
-    return recordEvent(logs, { ...params, actor });
+    try {
+      const actor = (currentUser && currentUser.value) ? currentUser.value : '';
+      return recordEvent(logs, { ...params, actor });
+    } catch (e) {
+      console.warn('记录事件失败:', e);
+      return null;
+    }
   }
 
   function getEventsByEntity(entityType, entityId) {
-    if (!logs?.value) return [];
-    return logs.value.filter((e) =>
+    const safeLogs = getSafeLogs();
+    return safeLogs.filter((e) =>
       e.entityType === entityType && (entityId ? e.entityId === entityId : true)
-    ).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    ).sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
   }
 
   function getEventsByActor(actor) {
-    if (!logs?.value) return [];
-    return logs.value.filter((e) => e.actor === actor)
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    const safeLogs = getSafeLogs();
+    return safeLogs.filter((e) => e.actor === actor)
+      .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
   }
 
   function getEventsByDateRange(startDate, endDate) {
-    if (!logs?.value) return [];
-    return logs.value.filter((e) => {
+    const safeLogs = getSafeLogs();
+    return safeLogs.filter((e) => {
+      if (!e.timestamp) return false;
       const ts = new Date(e.timestamp);
+      if (isNaN(ts.getTime())) return false;
       return ts >= new Date(startDate) && ts <= new Date(endDate);
-    }).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    }).sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
   }
 
   function getRecentEvents(limit = 50) {
-    if (!logs?.value) return [];
-    return [...logs.value]
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    const safeLogs = getSafeLogs();
+    return [...safeLogs]
+      .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
       .slice(0, limit);
   }
 
   function filterEvents({ entityTypes = [], actions = [], actor = '', searchText = '', startDate = '', endDate = '' }) {
-    if (!logs?.value) return [];
-    let result = [...logs.value];
+    const safeLogs = getSafeLogs();
+    let result = [...safeLogs];
 
-    if (entityTypes.length > 0) {
+    if (Array.isArray(entityTypes) && entityTypes.length > 0) {
       result = result.filter((e) => entityTypes.includes(e.entityType));
     }
-    if (actions.length > 0) {
+    if (Array.isArray(actions) && actions.length > 0) {
       result = result.filter((e) => actions.includes(e.action));
     }
     if (actor) {
       result = result.filter((e) => e.actor === actor);
     }
     if (searchText) {
-      const lower = searchText.toLowerCase();
+      const lower = String(searchText).toLowerCase();
       result = result.filter((e) =>
-        (e.entityName && e.entityName.toLowerCase().includes(lower)) ||
-        (e.notes && e.notes.toLowerCase().includes(lower)) ||
-        (e.relatedEntityName && e.relatedEntityName.toLowerCase().includes(lower)) ||
-        (e.actor && e.actor.toLowerCase().includes(lower)) ||
-        (e.beforeState && e.beforeState.toLowerCase().includes(lower)) ||
-        (e.afterState && e.afterState.toLowerCase().includes(lower))
+        (e.entityName && String(e.entityName).toLowerCase().includes(lower)) ||
+        (e.notes && String(e.notes).toLowerCase().includes(lower)) ||
+        (e.relatedEntityName && String(e.relatedEntityName).toLowerCase().includes(lower)) ||
+        (e.actor && String(e.actor).toLowerCase().includes(lower)) ||
+        (e.beforeState && String(e.beforeState).toLowerCase().includes(lower)) ||
+        (e.afterState && String(e.afterState).toLowerCase().includes(lower))
       );
     }
     if (startDate) {
-      result = result.filter((e) => e.timestamp >= startDate);
+      result = result.filter((e) => e.timestamp && e.timestamp >= startDate);
     }
     if (endDate) {
-      result = result.filter((e) => e.timestamp <= endDate + 'T23:59:59.999Z');
+      result = result.filter((e) => e.timestamp && e.timestamp <= endDate + 'T23:59:59.999Z');
     }
 
-    return result.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return result.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
   }
 
   function getEventStats() {
-    if (!logs?.value) {
-      return { total: 0, byEntity: {}, byAction: {}, byActor: {} };
-    }
-    const all = logs.value;
+    const safeLogs = getSafeLogs();
     const byEntity = {};
     const byAction = {};
     const byActor = {};
 
-    for (const e of all) {
-      byEntity[e.entityType] = (byEntity[e.entityType] || 0) + 1;
-      byAction[e.action] = (byAction[e.action] || 0) + 1;
-      if (e.actor) {
+    for (const e of safeLogs) {
+      if (!e || typeof e !== 'object') continue;
+      const entityType = e.entityType || 'unknown';
+      const action = e.action || 'unknown';
+      byEntity[entityType] = (byEntity[entityType] || 0) + 1;
+      byAction[action] = (byAction[action] || 0) + 1;
+      if (e.actor && typeof e.actor === 'string') {
         byActor[e.actor] = (byActor[e.actor] || 0) + 1;
       }
     }
 
     return {
-      total: all.length,
+      total: safeLogs.length,
       byEntity,
       byAction,
       byActor
