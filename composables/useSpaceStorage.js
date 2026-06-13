@@ -351,7 +351,7 @@ export function cloneSpaceFromTemplate(templateId, options = {}) {
             ...r,
             id: newId,
             gearId: idMap.gears[r.gearId] || r.gearId,
-            fromReservationId: r.fromReservationId ? (idMap.reservations[r.fromReservationId] || '') : ''
+            fromReservationId: r.fromReservationId || ''
           };
         });
     }
@@ -445,12 +445,13 @@ export function cloneSpaceFromTemplate(templateId, options = {}) {
           };
         });
 
-      if (result.requests.length > 0) {
-        result.requests = result.requests.map((r) => ({
-          ...r,
-          fromReservationId: r.fromReservationId ? (idMap.reservations[r.fromReservationId] || '') : ''
-        }));
-      }
+    }
+
+    if (result.requests.length > 0) {
+      result.requests = result.requests.map((r) => ({
+        ...r,
+        fromReservationId: r.fromReservationId ? (idMap.reservations[r.fromReservationId] || '') : ''
+      }));
     }
   }
 
@@ -611,6 +612,19 @@ export function buildExportData(spaceData, spaceInfo = null) {
     result._isTemplate = true;
     result._templateId = spaceData._templateId || '';
     result._templateName = spaceData._templateName || '';
+  }
+  const templates = getTemplateList();
+  if (templates.length > 0) {
+    result._spaceTemplates = {
+      list: templates,
+      data: templates.reduce((acc, template) => {
+        const templateData = getTemplateDataRaw(template.id);
+        if (templateData) {
+          acc[template.id] = templateData;
+        }
+        return acc;
+      }, {})
+    };
   }
   DATA_ENTITIES.forEach((key) => {
     if (spaceData[key] !== undefined && Array.isArray(spaceData[key])) {
