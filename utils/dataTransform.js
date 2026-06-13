@@ -297,6 +297,20 @@ export function normalizeInventoryItems(rawItems, gearList, memberList = []) {
       ? item.checkStatus
       : '待盘点';
     const checker = memberNames.includes(item.checker) ? item.checker : (item.checker || '');
+    const hasAbnormal = item.checkStatus === '缺失' || !!(item.notes && item.notes.trim()) || !!(item.missingAccessories && item.missingAccessories.trim());
+    const abnormalActions = Array.isArray(item.abnormalActions)
+      ? item.abnormalActions.map((a) => ({
+          id: a.id || crypto.randomUUID(),
+          type: a.type || '',
+          description: a.description || '',
+          amount: a.amount !== undefined ? String(a.amount) : '0',
+          handler: a.handler || '',
+          status: a.status || '待处理',
+          relatedRecordId: a.relatedRecordId || '',
+          createdAt: a.createdAt || new Date().toISOString(),
+          updatedAt: a.updatedAt || new Date().toISOString()
+        }))
+      : [];
     return {
       id: item.id || crypto.randomUUID(),
       gearId: gear ? gear.id : (item.gearId || ''),
@@ -305,7 +319,9 @@ export function normalizeInventoryItems(rawItems, gearList, memberList = []) {
       checkStatus,
       missingAccessories: item.missingAccessories || '',
       notes: item.notes || '',
-      checker
+      checker,
+      hasAbnormal: item.hasAbnormal !== undefined ? item.hasAbnormal : hasAbnormal,
+      abnormalActions
     };
   }).filter(Boolean);
   return { data, warnings };

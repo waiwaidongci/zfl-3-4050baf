@@ -2,6 +2,7 @@ import { computed } from 'vue';
 import {
   createInventoryList,
   createInventoryItemFromGear,
+  createAbnormalAction,
   getInventoryStats
 } from '../utils/inventoryTransform.js';
 
@@ -105,15 +106,15 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     if (!list) return null;
     return {
       ...list,
-      items: list.items.map((item) =>
-        item.id === itemId
-          ? {
-              ...item,
-              checkStatus,
-              checker: checkStatus !== '待盘点' ? (item.checker || user.value) : item.checker
-            }
-          : item
-      ),
+      items: list.items.map((item) => {
+        if (item.id !== itemId) return item;
+        const updatedItem = {
+          ...item,
+          checkStatus,
+          checker: checkStatus !== '待盘点' ? (item.checker || user.value) : item.checker
+        };
+        return refreshItemAbnormalFlag(updatedItem);
+      }),
       updatedAt: new Date().toISOString()
     };
   }
@@ -123,9 +124,11 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     if (!list) return null;
     return {
       ...list,
-      items: list.items.map((item) =>
-        item.id === itemId ? { ...item, ...updates } : item
-      ),
+      items: list.items.map((item) => {
+        if (item.id !== itemId) return item;
+        const updatedItem = { ...item, ...updates };
+        return refreshItemAbnormalFlag(updatedItem);
+      }),
       updatedAt: new Date().toISOString()
     };
   }
@@ -200,6 +203,113 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     return lists.value.find((l) => l.id === listId) || null;
   }
 
+  function refreshItemAbnormalFlag(item) {
+    const hasAbnormal =
+      item.checkStatus === '缺失' ||
+      !!(item.missingAccessories && item.missingAccessories.trim()) ||
+      !!(item.notes && item.notes.trim());
+    return { ...item, hasAbnormal };
+  }
+
+  function addAbnormalAction(inventoryId, itemId, actionData) {
+    const list = lists.value.find((l) => l.id === inventoryId);
+    if (!list) return null;
+    const action = createAbnormalAction({
+      type: actionData.type,
+      description: actionData.description || '',
+      amount: actionData.amount || '0',
+      handler: actionData.handler || user.value
+    });
+    return {
+      ...list,
+      items: list.items.map((item) => {
+        if (item.id !== itemId) return item;
+        const updatedItem = {
+          ...item,
+          abnormalActions: [...(item.abnormalActions || []), action]
+        };
+        return refreshItemAbnormalFlag(updatedItem);
+      }),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  function updateAbnormalAction(inventoryId, itemId, actionId, updates) {
+    const list = lists.value.find((l) => l.id === inventoryId);
+    if (!list) return null;
+    return {
+      ...list,
+      items: list.items.map((item) => {
+        if (item.id !== itemId) return item;
+        const abnormalActions = (item.abnormalActions || []).map((a) =>
+          a.id === actionId ? { ...a, ...updates, updatedAt: new Date().toISOString() } : a
+        );
+        const updatedItem = { ...item, abnormalActions };
+        return refreshItemAbnormalFlag(updatedItem);
+      }),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  function removeAbnormalAction(inventoryId, itemId, actionId) {
+    const list = lists.value.find((l) => l.id === inventoryId);
+    if (!list) return null;
+    return {
+      ...list,
+      items: list.items.map((item) => {
+        if (item.id !== itemId) return item;
+        const abnormalActions = (item.abnormalActions || []).filter((a) => a.id !== actionId);
+        const updatedItem = { ...item, abnormalActions };
+        return refreshItemAbnormalFlag(updatedItem);
+      }),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  function getAbnormalActionsByGear(gearId) {
+    const actions = [];
+    for (const list of lists.value) {
+      for (const item of list.items) {
+        if (item.gearId !== gearId) continue;
+        (item.abnormalActions || []).forEach((action) => {
+          actions.push({
+            ...action,
+            inventoryId: list.id,
+            inventoryName: list.name,
+            inventoryDate: list.date,
+            inventoryType: list.type,
+            itemId: item.id
+          });
+        });
+      }
+    }
+    return actions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  function getPendingAbnormalActions() {
+    const actions = [];
+    for (const list of lists.value) {
+      for (const item of list.items) {
+        (item.abnormalActions || []).forEach((action) => {
+          if (action.status === '待处理') {
+            actions.push({
+              ...action,
+              inventoryId: list.id,
+              inventoryName: list.name,
+              inventoryDate: list.date,
+              inventoryType: list.type,
+              itemId: item.id,
+              gearId: item.gearId,
+              gearName: item.gearName,
+              owner: item.owner
+            });
+          }
+        });
+      }
+    }
+    return actions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
   return {
     lists,
     inventoryCount,
@@ -217,6 +327,11 @@ export function useInventory({ inventoryLists, gears, trips, members, currentUse
     reopenList,
     addGearsFromTrip,
     getStats,
-    getListById
+    getListById,
+    addAbnormalAction,
+    updateAbnormalAction,
+    removeAbnormalAction,
+    getAbnormalActionsByGear,
+    getPendingAbnormalActions
   };
 }

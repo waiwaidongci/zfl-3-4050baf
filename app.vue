@@ -576,7 +576,8 @@ const healthInfoMap = computed(() =>
     requests: requests.value,
     handovers: handoverRecords.value,
     maintenanceRecords: maintenanceRecords.value,
-    depositRecords: depositRecords.value
+    depositRecords: depositRecords.value,
+    inventoryLists: inventoryLists.value
   })
 );
 
@@ -2758,6 +2759,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
       :deposit-records="depositRecords"
       :gears="gears"
       :requests="requests"
+      :inventory-lists="inventoryLists"
       :current-user="currentUser"
       @update:settlement-records="val => settlementRecords = val"
     />
@@ -2789,6 +2791,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
           :handovers="handoverRecords"
           :maintenanceRecords="maintenanceRecords"
           :depositRecords="depositRecords"
+          :inventory-lists="inventoryLists"
           @close="closeHealthProfile"
           @create-maintenance="handleCreateMaintenanceFromProfile"
         />

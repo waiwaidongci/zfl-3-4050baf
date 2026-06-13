@@ -135,10 +135,13 @@
 
               <div v-if="sm.depositItems.length > 0" class="ms-deposits">
                 <div class="ms-sub-title">所借装备押金</div>
-                <div v-for="(dep, dIdx) in sm.depositItems" :key="dep.depositId" class="ms-deposit-row">
-                  <span class="dep-gear">{{ dep.gearName }}</span>
+                <div v-for="(dep, dIdx) in sm.depositItems" :key="dep.depositId" class="ms-deposit-row" :class="{ 'from-inventory': dep.source === 'inventory' }">
+                  <span class="dep-gear">
+                    {{ dep.gearName }}
+                    <span v-if="dep.source === 'inventory'" class="dep-source">盘点异常</span>
+                  </span>
                   <span class="dep-amount">押金 ¥{{ dep.depositAmount }}</span>
-                  <span class="dep-deducted">已扣除 ¥{{ dep.deductedAmount }}</span>
+                  <span class="dep-deducted">应扣 ¥{{ dep.deductedAmount }}</span>
                   <div class="dep-actual">
                     <label>本次结算扣除</label>
                     <input
@@ -149,6 +152,12 @@
                       :disabled="currentSettlement.status === '已结算'"
                       class="small-input"
                     />
+                  </div>
+                  <div v-if="dep.source === 'inventory' && dep.description" class="dep-desc">
+                    📝 {{ dep.description }}
+                  </div>
+                  <div v-if="dep.source === 'inventory' && dep.pending" class="dep-pending">
+                    ⏳ 待确认处理
                   </div>
                 </div>
               </div>
@@ -263,6 +272,7 @@ const props = defineProps({
   depositRecords: { type: Array, default: () => [] },
   gears: { type: Array, default: () => [] },
   requests: { type: Array, default: () => [] },
+  inventoryLists: { type: Array, default: () => [] },
   currentUser: { type: String, default: '' }
 });
 
@@ -284,7 +294,8 @@ const settlement = useSettlement({
   members: toRef(props, 'members'),
   depositRecords: toRef(props, 'depositRecords'),
   gears: toRef(props, 'gears'),
-  requests: toRef(props, 'requests')
+  requests: toRef(props, 'requests'),
+  inventoryLists: toRef(props, 'inventoryLists')
 });
 
 const currentSettlement = computed(() => settlement.getById(selectedId.value));
@@ -494,11 +505,40 @@ function handleNotesChange(value) {
 .ms-sub-title { font-size: 13px; color: #555; font-weight: 600; margin-bottom: 6px; }
 .ms-deposit-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; border-bottom: 1px dashed #eee; flex-wrap: wrap; }
 .ms-deposit-row:last-child { border-bottom: none; }
+.ms-deposit-row.from-inventory {
+  background: #fffbf0;
+  margin: 4px -8px;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px dashed #f0d890;
+}
 .dep-gear { font-weight: 500; min-width: 80px; }
+.dep-source {
+  font-size: 11px;
+  background: #f59e0b;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  font-weight: normal;
+}
 .dep-amount { color: #63705d; }
 .dep-deducted { color: #b45309; }
 .dep-actual { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .dep-actual label { font-size: 12px; color: #888; white-space: nowrap; }
+.dep-desc {
+  width: 100%;
+  font-size: 12px;
+  color: #888;
+  margin-top: 4px;
+}
+.dep-pending {
+  width: 100%;
+  font-size: 12px;
+  color: #b45309;
+  font-weight: 500;
+  margin-top: 2px;
+}
 .ms-no-deposits { font-size: 13px; margin-bottom: 8px; }
 .ms-extra-share { font-size: 13px; color: #555; margin-bottom: 6px; }
 .ms-total-row { font-size: 14px; margin-bottom: 8px; padding: 6px 0; border-top: 1px solid #eee; }

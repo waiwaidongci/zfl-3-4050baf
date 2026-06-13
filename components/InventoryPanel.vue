@@ -50,6 +50,9 @@
         @complete="handleComplete"
         @reopen="handleReopen"
         @update-notes="handleUpdateNotes"
+        @add-action="handleAddAction"
+        @update-action="handleUpdateAction"
+        @remove-action="handleRemoveAction"
       />
       <div v-else class="empty-state">
         <p>盘点单不存在</p>
@@ -229,6 +232,27 @@ function handleReopen() {
 
 function handleUpdateNotes(notes) {
   const updated = inventory.updateListInfo(selectedId.value, { notes });
+  if (updated) {
+    updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+  }
+}
+
+function handleAddAction(itemId, actionData) {
+  const updated = inventory.addAbnormalAction(selectedId.value, itemId, actionData);
+  if (updated) {
+    updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+  }
+}
+
+function handleUpdateAction(itemId, actionId, updates) {
+  const updated = inventory.updateAbnormalAction(selectedId.value, itemId, actionId, updates);
+  if (updated) {
+    updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
+  }
+}
+
+function handleRemoveAction(itemId, actionId) {
+  const updated = inventory.removeAbnormalAction(selectedId.value, itemId, actionId);
   if (updated) {
     updateLists(props.inventoryLists.map((l) => (l.id === selectedId.value ? updated : l)));
   }

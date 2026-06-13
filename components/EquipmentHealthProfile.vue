@@ -99,6 +99,9 @@
           <div class="stat-card">
             <div class="stat-num">{{ damageCount }}<span class="stat-unit muted">次</span></div>
             <div class="stat-label">历史损耗记录</div>
+            <div v-if="inventoryDamageCount > 0" class="stat-sub muted">
+              含盘点发现 {{ inventoryDamageCount }} 次
+            </div>
           </div>
           <div class="stat-card">
             <div class="stat-num">
@@ -106,6 +109,17 @@
               <div class="stat-sub muted">{{ depositDeductCount }} 次扣除</div>
             </div>
             <div class="stat-label">累计押金扣除</div>
+            <div v-if="inventoryDepositDeductCount > 0" class="stat-sub muted">
+              含盘点待扣 {{ inventoryDepositDeductCount }} 次
+            </div>
+          </div>
+          <div v-if="inventoryAbnormalActions.length > 0" class="stat-card inventory-card">
+            <div class="stat-num">{{ inventoryAbnormalActions.length }}<span class="stat-unit muted">条</span></div>
+            <div class="stat-label">盘点异常记录</div>
+            <div class="stat-sub muted">
+              保养 {{ inventoryMaintenanceCount }} 次 · 待处理 
+              {{ inventoryAbnormalActions.filter(a => a.status === '待处理').length }} 条
+            </div>
           </div>
         </div>
       </section>
@@ -200,6 +214,10 @@ const props = defineProps({
   depositRecords: {
     type: Object,
     required: true
+  },
+  inventoryLists: {
+    type: Array,
+    default: () => []
   }
 });
 
@@ -221,14 +239,19 @@ const {
   riskTags,
   suggestedActions,
   overallHealthScore,
-  healthLevel
+  healthLevel,
+  inventoryAbnormalActions,
+  inventoryDamageCount,
+  inventoryMaintenanceCount,
+  inventoryDepositDeductCount
 } = useEquipmentHealth({
   gearId: gearIdRef,
   gears: props.gears,
   requests: props.requests,
   handovers: props.handovers,
   maintenanceRecords: props.maintenanceRecords,
-  depositRecords: props.depositRecords
+  depositRecords: props.depositRecords,
+  inventoryLists: props.inventoryLists
 });
 
 function getCategoryIcon(category) {
@@ -521,6 +544,11 @@ function getCategoryIcon(category) {
 .stat-card.plan-upcoming {
   border-color: #f0d5b0;
   background: #fffaf2;
+}
+
+.stat-card.inventory-card {
+  border-color: #f0d5b0;
+  background: linear-gradient(135deg, #fffaf0, #fff5e0);
 }
 
 .stat-sub.danger {

@@ -7,6 +7,8 @@ const iso = (offset = 0) => {
 export const INVENTORY_TYPES = ['出行前', '出行后'];
 export const INVENTORY_STATUSES = ['进行中', '已完成'];
 export const ITEM_CHECK_STATUSES = ['待盘点', '已盘点', '缺失'];
+export const ABNORMAL_ACTION_TYPES = ['装备损耗', '保养记录', '押金扣除'];
+export const ABNORMAL_ACTION_STATUSES = ['待处理', '已处理', '已取消'];
 
 export function createInventoryItemFromGear(gear, checker = '') {
   return {
@@ -17,7 +19,9 @@ export function createInventoryItemFromGear(gear, checker = '') {
     checkStatus: '待盘点',
     missingAccessories: '',
     notes: '',
-    checker
+    checker,
+    hasAbnormal: false,
+    abnormalActions: []
   };
 }
 
@@ -33,6 +37,20 @@ export function createInventoryList({ name, type, tripId = '', tripName = '', ch
     checker,
     notes: notes || '',
     items: [...items],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+export function createAbnormalAction({ type, description = '', amount = '0', handler = '' }) {
+  return {
+    id: crypto.randomUUID(),
+    type,
+    description,
+    amount: String(amount),
+    handler,
+    status: '待处理',
+    relatedRecordId: '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

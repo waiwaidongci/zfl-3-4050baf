@@ -29,7 +29,45 @@ export function createSettlement({ tripId, tripName, members = [], name = '' }) 
   };
 }
 
-export function linkDepositsToSettlement(settlement, depositRecords, tripMembers, tripGears = [], tripRequestIds = null) {
+function collectInventoryDepositDeductions(inventoryLists, tripMembers, tripGears = []) {
+  const memberNames = new Set(tripMembers.map((m) => m.nickname || m));
+  const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
+  const useGearFilter = tripGearIds.size > 0;
+  const deductions = [];
+
+  for (const list of inventoryLists || []) {
+    for (const item of list.items || []) {
+      if (useGearFilter && !tripGearIds.has(item.gearId)) continue;
+      (item.abnormalActions || []).forEach((action) => {
+        if (action.type !== '押金扣除') return;
+        if (action.status === '已取消') return;
+        const amount = Number(action.amount) || 0;
+        if (amount <= 0) return;
+        deductions.push({
+          id: `inv-${action.id}`,
+          source: 'inventory',
+          inventoryId: list.id,
+          inventoryName: list.name,
+          inventoryDate: list.date,
+          inventoryType: list.type,
+          itemId: item.id,
+          gearId: item.gearId,
+          gearName: item.gearName,
+          owner: item.owner,
+          actionId: action.id,
+          amount: String(amount),
+          description: action.description,
+          handler: action.handler,
+          status: action.status,
+          createdAt: action.createdAt
+        });
+      });
+    }
+  }
+  return deductions;
+}
+
+export function linkDepositsToSettlement(settlement, depositRecords, tripMembers, tripGears = [], tripRequestIds = null, inventoryLists = []) {
   const memberNames = new Set(tripMembers.map((m) => m.nickname || m));
   const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
   const requestIds = new Set((tripRequestIds || []).filter(Boolean));
@@ -43,6 +81,8 @@ export function linkDepositsToSettlement(settlement, depositRecords, tripMembers
     return true;
   });
 
+  const inventoryDeductions = collectInventoryDepositDeductions(inventoryLists, tripMembers, tripGears);
+
   const updatedMembers = settlement.members.map((sm) => {
     const memberDeposits = relevantDeposits.filter((d) => d.borrower === sm.nickname);
     const depositItems = memberDeposits.map((d) => ({
@@ -50,9 +90,27 @@ export function linkDepositsToSettlement(settlement, depositRecords, tripMembers
       gearName: d.gearName,
       depositAmount: d.depositAmount || '0',
       deductedAmount: d.deductedAmount || '0',
-      actualDeduct: d.deductedAmount || '0'
+      actualDeduct: d.deductedAmount || '0',
+      source: 'deposit'
     }));
-    return { ...sm, depositItems };
+    const memberInventoryDeductions = inventoryDeductions.filter((d) => {
+      if (d.owner === sm.nickname) return true;
+      return false;
+    });
+    const inventoryItems = memberInventoryDeductions.map((d) => ({
+      depositId: d.id,
+      gearName: d.gearName,
+      depositAmount: '0',
+      deductedAmount: d.amount,
+      actualDeduct: d.status === '已处理' ? d.amount : '0',
+      source: 'inventory',
+      inventoryId: d.inventoryId,
+      inventoryName: d.inventoryName,
+      inventoryDate: d.inventoryDate,
+      description: d.description,
+      pending: d.status === '待处理'
+    }));
+    return { ...sm, depositItems: [...depositItems, ...inventoryItems] };
   });
 
   return { ...settlement, members: updatedMembers };
@@ -192,7 +250,7 @@ export function cleanupDeletedTrip(settlements, tripId) {
   });
 }
 
-export function syncDepositChanges(settlement, depositRecords, tripGears = [], tripRequestIds = null) {
+export function syncDepositChanges(settlement, depositRecords, tripGears = [], tripRequestIds = null, inventoryLists = []) {
   const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
   const requestIds = new Set((tripRequestIds || []).filter(Boolean));
   const useGearFilter = tripGearIds.size > 0;
@@ -217,11 +275,30 @@ export function syncDepositChanges(settlement, depositRecords, tripGears = [], t
         gearName: d.gearName,
         depositAmount: d.depositAmount || '0',
         deductedAmount: d.deductedAmount || '0',
-        actualDeduct: existing ? existing.actualDeduct : (d.deductedAmount || '0')
+        actualDeduct: existing ? existing.actualDeduct : (d.deductedAmount || '0'),
+        source: 'deposit'
       };
     });
 
-    return { ...sm, depositItems };
+    const inventoryDeductions = collectInventoryDepositDeductions(inventoryLists, [sm], tripGears);
+    const inventoryItems = inventoryDeductions.map((d) => {
+      const existing = existingMap[d.id];
+      return {
+        depositId: d.id,
+        gearName: d.gearName,
+        depositAmount: '0',
+        deductedAmount: d.amount,
+        actualDeduct: existing ? existing.actualDeduct : (d.status === '已处理' ? d.amount : '0'),
+        source: 'inventory',
+        inventoryId: d.inventoryId,
+        inventoryName: d.inventoryName,
+        inventoryDate: d.inventoryDate,
+        description: d.description,
+        pending: d.status === '待处理'
+      };
+    });
+
+    return { ...sm, depositItems: [...depositItems, ...inventoryItems] };
   });
 
   return calculateSettlement({ ...settlement, members });

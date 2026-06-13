@@ -96,6 +96,9 @@
           @toggle-status="handleToggleItem(item.id)"
           @update-item="(updates) => handleUpdateItem(item.id, updates)"
           @remove="handleRemoveItem(item.id)"
+          @add-action="(actionData) => handleAddAction(item.id, actionData)"
+          @update-action="(actionId, updates) => handleUpdateAction(item.id, actionId, updates)"
+          @remove-action="(actionId) => handleRemoveAction(item.id, actionId)"
         />
       </div>
     </div>
@@ -135,7 +138,10 @@ const emit = defineEmits([
   'add-gears-from-trip',
   'complete',
   'reopen',
-  'update-notes'
+  'update-notes',
+  'add-action',
+  'update-action',
+  'remove-action'
 ]);
 
 const currentFilter = ref('全部');
@@ -215,6 +221,18 @@ function saveNotes() {
 function cancelEditNotes() {
   editingNotes.value = false;
   notesDraft.value = '';
+}
+
+function handleAddAction(itemId, actionData) {
+  emit('add-action', itemId, actionData);
+}
+
+function handleUpdateAction(itemId, actionId, updates) {
+  emit('update-action', itemId, actionId, updates);
+}
+
+function handleRemoveAction(itemId, actionId) {
+  emit('remove-action', itemId, actionId);
 }
 </script>
 

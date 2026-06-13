@@ -63,7 +63,10 @@ function getIcon(type) {
     'borrow': '📝',
     'handover-out': '📤',
     'handover-in': '📥',
-    'deposit-deduct': '💸'
+    'deposit-deduct': '💸',
+    'inventory-damage': '⚠️',
+    'inventory-maintenance': '🔧',
+    'inventory-deposit': '💰'
   };
   return map[type] || '📌';
 }
@@ -74,7 +77,10 @@ function getTypeLabel(type) {
     'borrow': '申请',
     'handover-out': '借出',
     'handover-in': '归还',
-    'deposit-deduct': '扣押金'
+    'deposit-deduct': '扣押金',
+    'inventory-damage': '盘点损耗',
+    'inventory-maintenance': '盘点保养',
+    'inventory-deposit': '盘点扣押金'
   };
   return map[type] || '事件';
 }
@@ -158,6 +164,21 @@ function hasMeta(event) {
   border-color: #d97a7a;
 }
 
+.timeline-item.inventory-damage .timeline-dot {
+  background: #fff3e0;
+  border-color: #ffa726;
+}
+
+.timeline-item.inventory-maintenance .timeline-dot {
+  background: #e8f5e9;
+  border-color: #66bb6a;
+}
+
+.timeline-item.inventory-deposit .timeline-dot {
+  background: #fce4ec;
+  border-color: #ec407a;
+}
+
 .timeline-line {
   position: absolute;
   left: 17px;
@@ -218,6 +239,21 @@ function hasMeta(event) {
 .timeline-type-tag.deposit-deduct {
   background: #fbe9e7;
   color: #8a2a2a;
+}
+
+.timeline-type-tag.inventory-damage {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.timeline-type-tag.inventory-maintenance {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.timeline-type-tag.inventory-deposit {
+  background: #fce4ec;
+  color: #ad1457;
 }
 
 .timeline-title {

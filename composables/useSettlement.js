@@ -20,12 +20,13 @@ function resolve(val) {
   return val;
 }
 
-export function useSettlement({ settlementRecords, trips, members, depositRecords, gears, requests }) {
+export function useSettlement({ settlementRecords, trips, members, depositRecords, gears, requests, inventoryLists }) {
   const records = computed(() => resolve(settlementRecords) || []);
   const tripList = computed(() => resolve(trips) || []);
   const memberList = computed(() => resolve(members) || []);
   const depositList = computed(() => resolve(depositRecords) || []);
   const requestList = computed(() => resolve(requests) || []);
+  const inventoryList = computed(() => resolve(inventoryLists) || []);
 
   const settlementCount = computed(() => records.value.length);
   const draftCount = computed(() => records.value.filter((s) => s.status === '草稿').length);
@@ -61,7 +62,7 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
       members: tripMembers,
       name: `${trip.destination} 结算单`
     });
-    const linked = linkDepositsToSettlement(settlement, depositList.value, trip.members, tripGears, tripRequestIds);
+    const linked = linkDepositsToSettlement(settlement, depositList.value, trip.members, tripGears, tripRequestIds, inventoryList.value);
     return calculateSettlement(linked);
   }
 
@@ -74,7 +75,7 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
       name: name || '新结算单'
     });
     const memberNames = selectedMembers.map((m) => m.nickname);
-    const linked = linkDepositsToSettlement(settlement, depositList.value, memberNames);
+    const linked = linkDepositsToSettlement(settlement, depositList.value, memberNames, [], null, inventoryList.value);
     return calculateSettlement(linked);
   }
 
@@ -126,7 +127,7 @@ export function useSettlement({ settlementRecords, trips, members, depositRecord
     const trip = record.tripId ? tripList.value.find((t) => t.id === record.tripId) : null;
     const tripGears = trip ? (trip.gears || []) : [];
     const tripRequestIds = getTripRequestIds(trip);
-    return syncDepositChanges(record, depositList.value, tripGears, tripRequestIds);
+    return syncDepositChanges(record, depositList.value, tripGears, tripRequestIds, inventoryList.value);
   }
 
   function getStats(settlementId) {

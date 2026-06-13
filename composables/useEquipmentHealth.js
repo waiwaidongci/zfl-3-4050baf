@@ -300,7 +300,27 @@ export function calcOverallHealthScore({ gear, damageCount, depositDeductCount, 
   return Math.max(0, Math.min(100, score));
 }
 
-export function buildAllHealthInfoMap({ gears, requests, handovers, maintenanceRecords, depositRecords }) {
+function getInventoryAbnormalByGear(gearId, inventoryLists) {
+  const actions = [];
+  const lists = inventoryLists || [];
+  for (const list of lists) {
+    for (const item of list.items || []) {
+      if (item.gearId !== gearId) continue;
+      (item.abnormalActions || []).forEach((action) => {
+        actions.push({
+          ...action,
+          inventoryId: list.id,
+          inventoryName: list.name,
+          inventoryDate: list.date,
+          inventoryType: list.type
+        });
+      });
+    }
+  }
+  return actions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function buildAllHealthInfoMap({ gears, requests, handovers, maintenanceRecords, depositRecords, inventoryLists }) {
   const map = {};
   const gearList = gears || [];
   const reqList = requests || [];
@@ -321,10 +341,21 @@ export function buildAllHealthInfoMap({ gears, requests, handovers, maintenanceR
       : null;
     const daysSinceLastMaintenance = lastMaintenance ? daysAgo(lastMaintenance.date) : null;
 
-    const damageCount = relatedHandovers.filter((h) => h.damageRecord && h.damageRecord.trim()).length;
+    const handoverDamageCount = relatedHandovers.filter((h) => h.damageRecord && h.damageRecord.trim()).length;
+    const abnormalActions = getInventoryAbnormalByGear(gear.id, inventoryLists);
+    const inventoryDamageCount = abnormalActions.filter((a) => a.type === '装备损耗' && a.status !== '已取消').length;
+    const damageCount = handoverDamageCount + inventoryDamageCount;
 
     const relatedDeposits = dList.filter((d) => d.gearId === gear.id);
     const depositDeductCount = relatedDeposits.filter((d) => Number(d.deductedAmount) > 0).length;
+    const inventoryDepositDeductCount = abnormalActions.filter(
+      (a) => a.type === '押金扣除' && a.status !== '已取消'
+    ).length;
+    const totalDepositDeductCount = depositDeductCount + inventoryDepositDeductCount;
+
+    const inventoryMaintenanceCount = abnormalActions.filter(
+      (a) => a.type === '保养记录' && a.status === '已处理'
+    ).length;
 
     const maintenancePlanStatus = getMaintenancePlanStatus(gear);
 
@@ -332,13 +363,16 @@ export function buildAllHealthInfoMap({ gears, requests, handovers, maintenanceR
       gearId: gear.id,
       borrowCount,
       damageCount,
-      depositDeductCount,
+      depositDeductCount: totalDepositDeductCount,
       daysSinceLastMaintenance,
       maintenancePlanStatus,
+      inventoryAbnormalActions: abnormalActions,
+      inventoryDamageCount,
+      inventoryMaintenanceCount,
       overallHealthScore: calcOverallHealthScore({
         gear,
         damageCount,
-        depositDeductCount,
+        depositDeductCount: totalDepositDeductCount,
         daysSinceLastMaintenance,
         borrowCount,
         maintenancePlanStatus
@@ -348,7 +382,7 @@ export function buildAllHealthInfoMap({ gears, requests, handovers, maintenanceR
   return map;
 }
 
-export function useEquipmentHealth({ gearId, gears, requests, handovers, maintenanceRecords, depositRecords }) {
+export function useEquipmentHealth({ gearId, gears, requests, handovers, maintenanceRecords, depositRecords, inventoryLists }) {
   const gear = computed(() => {
     const g = resolve(gears) || [];
     const id = resolve(gearId);
@@ -379,6 +413,30 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
     return list.filter((d) => d.gearId === id);
   });
 
+  const inventoryAbnormalActions = computed(() => {
+    const id = resolve(gearId);
+    const lists = resolve(inventoryLists) || [];
+    return getInventoryAbnormalByGear(id, lists);
+  });
+
+  const inventoryDamageCount = computed(() =>
+    inventoryAbnormalActions.value.filter((a) => a.type === '装备损耗' && a.status !== '已取消').length
+  );
+
+  const inventoryMaintenanceCount = computed(() =>
+    inventoryAbnormalActions.value.filter((a) => a.type === '保养记录' && a.status === '已处理').length
+  );
+
+  const inventoryDepositDeductCount = computed(() =>
+    inventoryAbnormalActions.value.filter((a) => a.type === '押金扣除' && a.status !== '已取消').length
+  );
+
+  const inventoryDepositDeductTotal = computed(() =>
+    inventoryAbnormalActions.value
+      .filter((a) => a.type === '押金扣除' && a.status !== '已取消')
+      .reduce((sum, a) => sum + (Number(a.amount) || 0), 0)
+  );
+
   const completedBorrowHandovers = computed(() =>
     getCompletedBorrowHandovers(relatedHandovers.value)
   );
@@ -403,35 +461,52 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
     gear.value ? getMaintenancePlanStatus(gear.value) : null
   );
 
-  const damageRecords = computed(() =>
+  const handoverDamageRecords = computed(() =>
     relatedHandovers.value.filter((h) => h.damageRecord && h.damageRecord.trim())
   );
 
-  const damageCount = computed(() => damageRecords.value.length);
+  const damageCount = computed(() => handoverDamageRecords.value.length + inventoryDamageCount.value);
 
   const depositDeductRecords = computed(() =>
     relatedDeposits.value.filter((d) => Number(d.deductedAmount) > 0)
   );
 
-  const depositDeductCount = computed(() => depositDeductRecords.value.length);
+  const depositDeductCount = computed(() => depositDeductRecords.value.length + inventoryDepositDeductCount.value);
 
-  const depositDeductTotal = computed(() =>
-    depositDeductRecords.value.reduce((sum, d) => sum + (Number(d.deductedAmount) || 0), 0)
-  );
+  const depositDeductTotal = computed(() => {
+    const handoverTotal = depositDeductRecords.value.reduce((sum, d) => sum + (Number(d.deductedAmount) || 0), 0);
+    return handoverTotal + inventoryDepositDeductTotal.value;
+  });
 
   const borrowerHistory = computed(() =>
     buildBorrowerHistory(completedBorrowHandovers.value, relatedRequests.value)
   );
 
-  const timeline = computed(() =>
-    buildTimelineEvents({
+  const timeline = computed(() => {
+    const baseEvents = buildTimelineEvents({
       gear: gear.value,
       requests: relatedRequests.value,
       handovers: relatedHandovers.value,
       maintenanceRecords: relatedMaintenance.value,
       depositRecords: relatedDeposits.value
-    })
-  );
+    });
+    const inventoryEvents = inventoryAbnormalActions.value.map((a) => ({
+      id: `inv-${a.id}`,
+      date: a.createdAt.slice(0, 10),
+      type: a.type === '装备损耗' ? 'inventory-damage' : (a.type === '保养记录' ? 'inventory-maintenance' : 'inventory-deposit'),
+      subType: a.status,
+      title: `${a.type}（盘点异常）`,
+      description: a.description,
+      meta: {
+        inventoryName: a.inventoryName,
+        inventoryType: a.inventoryType,
+        handler: a.handler,
+        amount: a.amount,
+        status: a.status
+      }
+    }));
+    return [...baseEvents, ...inventoryEvents].sort((a, b) => b.date.localeCompare(a.date));
+  });
 
   const riskTags = computed(() =>
     computeRiskTags({
@@ -496,6 +571,10 @@ export function useEquipmentHealth({ gearId, gears, requests, handovers, mainten
     riskTags,
     suggestedActions,
     overallHealthScore,
-    healthLevel
+    healthLevel,
+    inventoryAbnormalActions,
+    inventoryDamageCount,
+    inventoryMaintenanceCount,
+    inventoryDepositDeductCount
   };
 }
