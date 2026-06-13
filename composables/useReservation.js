@@ -382,6 +382,8 @@ export function useReservation({ reservations, gears, requests, handovers, membe
       (item) => !item.canActivate && item.warnings.length > 0 && !item.activationBlockers.length
     );
 
+    reviewItems.value = reviewCandidates;
+
     const newRequests = [];
     let updated = withPriorities;
 
@@ -401,7 +403,8 @@ export function useReservation({ reservations, gears, requests, handovers, membe
       activated: activatable ? [activatable.id] : [],
       newRequests,
       needsReview,
-      reviewModeAvailable: needsReview.length > 0
+      reviewModeAvailable: needsReview.length > 0,
+      allReviewItems: reviewCandidates
     };
   }
 

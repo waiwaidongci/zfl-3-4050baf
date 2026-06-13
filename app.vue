@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import DataImportExport from './components/DataImportExport.vue';
 import EquipmentHealthProfile from './components/EquipmentHealthProfile.vue';
 import InventoryPanel from './components/InventoryPanel.vue';
@@ -859,7 +859,8 @@ const pendingReviewNotification = ref(null);
 
 function triggerReservationCheck() {
   const beforeReservations = JSON.parse(JSON.stringify(reservations.value));
-  const result = reservationHelper.checkAndActivate();
+  const result = reservationHelper.checkAndActivateWithReview();
+  
   if (result.list) {
     reservations.value = result.list;
   }
@@ -894,8 +895,8 @@ function triggerReservationCheck() {
     }
   }
 
-  const reviewItems = reservationHelper.analyzeForReview();
-  if (reviewItems && reviewItems.length > 0) {
+  const reviewItems = reservationHelper.reviewItems || [];
+  if (reviewItems.length > 0) {
     const canActivateCount = reviewItems.filter(i => i.canActivate).length;
     const hasWarningCount = reviewItems.filter(i => i.warnings.length > 0 && !i.activationBlockers.length).length;
     const blockedCount = reviewItems.filter(i => i.activationBlockers.length > 0).length;
@@ -1072,6 +1073,10 @@ onMounted(() => {
   if (trips.value.length > 0 && !selectedTripId.value) {
     selectedTripId.value = trips.value[0].id;
   }
+
+  nextTick(() => {
+    reservationHelper.analyzeForReview();
+  });
 });
 
 watch(currentSpaceId, (newId, oldId) => {
@@ -3292,28 +3297,48 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
 }
 
 function getCalendarCellHighlight(rowKey, rowType, dateStr) {
-  const items = reservations.value.filter((res) => {
-    if (!res.generatedRequestId && (res.status === '候补中' || res.status === '审核跳过')) {
-      if (rowType === 'gear' && res.gearId !== rowKey) return false;
-      if (rowType === 'member' && res.borrower !== rowKey) return false;
-      const resStart = new Date(res.start);
-      const resEnd = new Date(res.end);
-      return dateStr >= resStart && dateStr <= resEnd;
-    }
-    return false;
+  const reviewItems = reservationHelper.reviewItems || [];
+  const items = reviewItems.filter((item) => {
+    const res = item.reservation;
+    if (!res) return false;
+    if (res.generatedRequestId) return false;
+    if (rowType === 'gear' && res.gearId !== rowKey) return false;
+    if (rowType === 'member' && res.borrower !== rowKey) return false;
+    const resStart = new Date(res.start);
+    const resEnd = new Date(res.end);
+    return dateStr >= resStart && dateStr <= resEnd;
   });
 
   if (items.length === 0) return null;
 
-  const hasSkipped = items.some(i => i.status === '审核跳过');
-  const hasHighPriority = items.some(i => i.priorityScore >= 80);
+  const hasSkipped = items.some(i => i.reservation.status === '审核跳过');
+  const hasHighPriority = items.some(i => i.reservation.priorityScore >= 80);
+  const hasBlocker = items.some(i => i.activationBlockers && i.activationBlockers.length > 0);
+  const hasWarning = items.some(i => i.warnings && i.warnings.length > 0);
+  const canActivate = items.some(i => i.canActivate);
 
   return {
     count: items.length,
     hasSkipped,
     hasHighPriority,
-    maxPriority: Math.max(...items.map(i => i.priorityScore))
+    hasBlocker,
+    hasWarning,
+    canActivate,
+    maxPriority: Math.max(...items.map(i => i.reservation.priorityScore || 0))
   };
+}
+
+function getCalendarHighlightTooltip(rowKey, rowType, dateStr) {
+  const highlight = getCalendarCellHighlight(rowKey, rowType, dateStr);
+  if (!highlight) return '';
+
+  const statuses = [];
+  if (highlight.canActivate) statuses.push('可直接转正');
+  if (highlight.hasWarning) statuses.push('存在警告');
+  if (highlight.hasBlocker) statuses.push('无法转正');
+  if (highlight.hasSkipped) statuses.push('含已跳过');
+
+  return `${highlight.count} 项候补待审核 | ${statuses.join('、')} | 最高优先级 ${highlight.maxPriority}`;
 }
 </script>
 
@@ -3890,9 +3915,12 @@ function getCalendarCellHighlight(rowKey, rowType, dateStr) {
               v-if="getCalendarCellHighlight(row.key, row.type, date)"
               :class="['review-highlight-indicator', {
                 'high-priority': getCalendarCellHighlight(row.key, row.type, date).hasHighPriority,
-                'has-skipped': getCalendarCellHighlight(row.key, row.type, date).hasSkipped
+                'has-skipped': getCalendarCellHighlight(row.key, row.type, date).hasSkipped,
+                'has-blocker': getCalendarCellHighlight(row.key, row.type, date).hasBlocker,
+                'has-warning': getCalendarCellHighlight(row.key, row.type, date).hasWarning,
+                'can-activate': getCalendarCellHighlight(row.key, row.type, date).canActivate
               }]"
-              :title="`${getCalendarCellHighlight(row.key, row.type, date).count} 项候补待审核，最高优先级 ${getCalendarCellHighlight(row.key, row.type, date).maxPriority}`"
+              :title="getCalendarHighlightTooltip(row.key, row.type, date)"
             >
               {{ getCalendarCellHighlight(row.key, row.type, date).count }}
             </div>
@@ -3926,7 +3954,10 @@ function getCalendarCellHighlight(rowKey, rowType, dateStr) {
         <span class="legend-item"><span class="legend-dot 借出中"></span>借出中</span>
         <span class="legend-item"><span class="legend-dot reservation"></span>候补预约</span>
         <span class="legend-item"><span class="legend-dot 审核跳过"></span>审核跳过</span>
-        <span class="legend-item"><span class="legend-dot review-highlight"></span>待审核高亮</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#2d7a3e;"></span>可转正</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#d97706;"></span>有警告</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#b02a2a;"></span>高优先级</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#9ca3af;"></span>无法转正</span>
       </div>
     </section>
 
@@ -5261,12 +5292,25 @@ function getCalendarCellHighlight(rowKey, rowType, dateStr) {
   animation: pulse 2s infinite;
 }
 
-.review-highlight-indicator.high-priority {
-  background: #b02a2a;
-}
-
 .review-highlight-indicator.has-skipped {
   background: #8a6d1b;
+}
+
+.review-highlight-indicator.can-activate {
+  background: #2d7a3e;
+}
+
+.review-highlight-indicator.has-warning {
+  background: #d97706;
+}
+
+.review-highlight-indicator.has-blocker {
+  background: #9ca3af;
+  animation: none;
+}
+
+.review-highlight-indicator.high-priority {
+  background: #b02a2a;
 }
 
 @keyframes pulse {
