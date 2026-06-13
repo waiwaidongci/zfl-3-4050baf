@@ -1216,6 +1216,7 @@ const lastInventoryByGear = computed(() => {
 
 const selectedTrip = computed(() => trips.value.find((t) => t.id === selectedTripId.value));
 const pendingGears = computed(() => selectedTrip.value ? selectedTrip.value.gears.filter((g) => g.status === '待借') : []);
+const waitingGears = computed(() => selectedTrip.value ? selectedTrip.value.gears.filter((g) => g.status === '待确认') : []);
 const confirmedGears = computed(() => selectedTrip.value ? selectedTrip.value.gears.filter((g) => g.status === '已确认') : []);
 const tripCategories = computed(() => ['全部分类', ...new Set(gears.value.map((gear) => gear.category))]);
 const tripFilteredGears = computed(() => gears.value.filter((gear) => tripCategoryFilter.value === '全部分类' || gear.category === tripCategoryFilter.value));
@@ -3162,6 +3163,32 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
                     </div>
                     <div class="gear-list-actions">
                       <button class="ghost small" @click="updateTripGearStatus(gear.gearId, '已确认')">确认已借</button>
+                      <button class="ghost small danger" @click="removeTripGear(gear.gearId)">移除</button>
+                    </div>
+                  </article>
+                </div>
+              </div>
+
+              <div class="gear-section">
+                <div class="section-header">
+                  <h4>待确认候补 ({{ waitingGears.length }})</h4>
+                </div>
+                <div v-if="waitingGears.length === 0" class="muted" style="padding: 12px; text-align: center;">暂无待确认候补装备</div>
+                <div v-else class="gear-list">
+                  <article v-for="gear in waitingGears" :key="gear.gearId" class="gear-list-item waiting">
+                    <div class="gear-list-info">
+                      <strong>{{ gear.gearName }}</strong>
+                      <span>装备主人：{{ gear.owner }} · 押金：{{ gear.deposit }}</span>
+                      <span class="availability-badge unavailable">
+                        候补原因：{{ gear.conflictReason || '待确认' }}
+                      </span>
+                      <span v-if="gear.queuePosition" class="availability-badge conflict">
+                        候补顺位 #{{ gear.queuePosition }}
+                      </span>
+                    </div>
+                    <div class="gear-list-actions">
+                      <button class="ghost small" @click="tab = '预约排程'">查看预约</button>
+                      <button class="ghost small" @click="updateTripGearStatus(gear.gearId, '待借')">改为待借</button>
                       <button class="ghost small danger" @click="removeTripGear(gear.gearId)">移除</button>
                     </div>
                   </article>
