@@ -372,36 +372,18 @@ export function useReservation({ reservations, gears, requests, handovers, membe
     const expired = expireOutdatedReservations(reservationList.value);
     const withPriorities = recalcAllPriorities(expired, getContextForPriority());
 
-    const activatable = findActivatableReservations(withPriorities, {
-      requests: requestList.value,
-      gears: gearList.value
-    });
-
     const reviewCandidates = analyzeAllActivatableReservations(withPriorities, getReviewContext());
     const needsReview = reviewCandidates.filter(
-      (item) => !item.canActivate && item.warnings.length > 0 && !item.activationBlockers.length
+      (item) => item.canActivate || (item.warnings.length > 0 && !item.activationBlockers.length)
     );
 
     reviewItems.value = reviewCandidates;
-
-    const newRequests = [];
-    let updated = withPriorities;
-
-    if (activatable) {
-      const gear = gearList.value.find((g) => g.id === activatable.gearId);
-      const newRequest = createRequestFromReservation(activatable, gear);
-      newRequests.push(newRequest);
-      updated = updated.map((r) =>
-        r.id === activatable.id ? activateReservation(r, newRequest.id) : r
-      );
-    }
-
-    const finalList = computeQueuePositions(updated);
+    const finalList = computeQueuePositions(withPriorities);
 
     return {
       list: finalList,
-      activated: activatable ? [activatable.id] : [],
-      newRequests,
+      activated: [],
+      newRequests: [],
       needsReview,
       reviewModeAvailable: needsReview.length > 0,
       allReviewItems: reviewCandidates

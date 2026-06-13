@@ -3298,6 +3298,7 @@ function getReservationsForCell(rowKey, rowType, dateStr) {
 
 function getCalendarCellHighlight(rowKey, rowType, dateStr) {
   const reviewItems = reservationHelper.reviewItems || [];
+  const date = new Date(dateStr);
   const items = reviewItems.filter((item) => {
     const res = item.reservation;
     if (!res) return false;
@@ -3306,7 +3307,7 @@ function getCalendarCellHighlight(rowKey, rowType, dateStr) {
     if (rowType === 'member' && res.borrower !== rowKey) return false;
     const resStart = new Date(res.start);
     const resEnd = new Date(res.end);
-    return dateStr >= resStart && dateStr <= resEnd;
+    return date >= resStart && date <= resEnd;
   });
 
   if (items.length === 0) return null;
