@@ -2,7 +2,11 @@
   <div class="import-preview">
     <div class="preview-header">
       <h3>数据预览</h3>
-      <span v-if="safeSummary.hasLegacyFormat" class="legacy-badge">旧版格式已兼容</span>
+      <div class="preview-badges">
+        <span v-if="safeSummary.hasLegacyFormat" class="legacy-badge">旧版格式已兼容</span>
+        <span v-if="safeSummary.isTemplateFormat" class="template-badge">📋 模板数据</span>
+        <span v-if="safeSummary.isClonedSpace" class="cloned-badge">🔄 模板克隆空间</span>
+      </div>
     </div>
 
     <div v-if="safeErrors.length > 0" class="error-section">
@@ -147,7 +151,7 @@ const canMerge = computed(() => !!props.previewResult?.mergeAnalysis);
 const safeSummary = computed(() => {
   const s = props.previewResult?.summary;
   if (!s || typeof s !== 'object') {
-    return { totalWarnings: 0, hasLegacyFormat: false };
+    return { totalWarnings: 0, hasLegacyFormat: false, isTemplateFormat: false, isClonedSpace: false };
   }
   return s;
 });
@@ -251,6 +255,12 @@ function handleConfirm() {
   border-bottom: 1px solid #eee;
 }
 
+.preview-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .preview-header h3 {
   margin: 0;
   color: #2f4a2c;
@@ -260,6 +270,22 @@ function handleConfirm() {
 .legacy-badge {
   background: #fff3cd;
   color: #856404;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.template-badge {
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.cloned-badge {
+  background: #e0e7ff;
+  color: #3730a3;
   padding: 4px 10px;
   border-radius: 4px;
   font-size: 12px;

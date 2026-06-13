@@ -464,9 +464,15 @@ export function validateAndNormalizeImportData(rawData) {
   );
 
   const isTemplateFormat = rawData._isTemplate === true;
+  const isClonedSpace = !!rawData._clonedFromTemplate;
 
   if (isTemplateFormat) {
     allWarnings.push(`检测到模板数据（来源：${rawData._templateName || '未知模板'}），导入时将保留数据但忽略模板标记`);
+  }
+
+  if (isClonedSpace) {
+    const spaceInfo = rawData._spaceInfo || {};
+    allWarnings.push(`检测到模板克隆空间数据（来源空间：${spaceInfo.name || '未知'}），关联ID将保持导入数据中的值`);
   }
 
   const entityPresence = {
@@ -506,7 +512,9 @@ export function validateAndNormalizeImportData(rawData) {
     totalWarnings: 0,
     hasLegacyFormat: isLegacyFormat,
     isTemplateFormat,
-    templateName: isTemplateFormat ? (rawData._templateName || '') : ''
+    templateName: isTemplateFormat ? (rawData._templateName || '') : '',
+    isClonedSpace,
+    clonedFromTemplateId: isClonedSpace ? (rawData._clonedFromTemplate || '') : ''
   };
 
   const membersResult = normalizeMembers(source.members);
@@ -1143,7 +1151,7 @@ export function validateAndNormalizeForMerge(rawData, currentData) {
       errors: ['数据格式无效'],
       warnings: [],
       data: null,
-      summary: { totalWarnings: 0, hasLegacyFormat: false }
+      summary: { totalWarnings: 0, hasLegacyFormat: false, isTemplateFormat: false, isClonedSpace: false }
     };
   }
 

@@ -454,11 +454,78 @@ export function cloneSpaceFromTemplate(templateId, options = {}) {
     }
   }
 
+  const ENTITY_TYPE_TO_IDMAP_KEY = {
+    member: 'members',
+    gear: 'gears',
+    request: 'requests',
+    handover: 'handoverRecords',
+    deposit: 'depositRecords',
+    settlement: 'settlementRecords',
+    inventory: 'inventoryLists',
+    reservation: 'reservations',
+    trip: 'trips',
+    maintenance: 'maintenanceRecords',
+    space: null
+  };
+
+  if (!clearBusinessFlow && templateData.eventLogs && Array.isArray(templateData.eventLogs)) {
+    result.eventLogs = templateData.eventLogs.map((e) => {
+      if (!e || typeof e !== 'object') return null;
+      const newLog = { ...e, id: crypto.randomUUID(), isCloned: true };
+      const idMapKey = ENTITY_TYPE_TO_IDMAP_KEY[e.entityType];
+      if (idMapKey && idMap[idMapKey] && e.entityId && idMap[idMapKey][e.entityId]) {
+        newLog.entityId = idMap[idMapKey][e.entityId];
+      }
+      const relatedIdMapKey = ENTITY_TYPE_TO_IDMAP_KEY[e.relatedEntityType];
+      if (relatedIdMapKey && idMap[relatedIdMapKey] && e.relatedEntityId && idMap[relatedIdMapKey][e.relatedEntityId]) {
+        newLog.relatedEntityId = idMap[relatedIdMapKey][e.relatedEntityId];
+      }
+      return newLog;
+    }).filter(Boolean);
+  }
+
+  const cloneSummaryParts = [];
+  if (result.members.length > 0) cloneSummaryParts.push(`成员${result.members.length}`);
+  if (result.gears.length > 0) cloneSummaryParts.push(`装备${result.gears.length}`);
+  if (result.maintenanceRecords.length > 0) cloneSummaryParts.push(`保养${result.maintenanceRecords.length}`);
+  if (result.depositRecords.length > 0) cloneSummaryParts.push(`押金${result.depositRecords.length}`);
+  if (result.trips.length > 0) cloneSummaryParts.push(`出行${result.trips.length}`);
+  if (result.requests.length > 0) cloneSummaryParts.push(`申请${result.requests.length}`);
+  if (result.handoverRecords.length > 0) cloneSummaryParts.push(`交接${result.handoverRecords.length}`);
+  if (result.inventoryLists.length > 0) cloneSummaryParts.push(`盘点${result.inventoryLists.length}`);
+  if (result.settlementRecords.length > 0) cloneSummaryParts.push(`结算${result.settlementRecords.length}`);
+  if (result.reservations.length > 0) cloneSummaryParts.push(`候补${result.reservations.length}`);
+
+  const templateName = templateData._templateName || '';
+  const cloneEvent = {
+    id: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+    entityType: 'space',
+    entityId: '',
+    entityName: '',
+    action: 'create',
+    actor: '',
+    beforeState: null,
+    afterState: null,
+    changes: [],
+    sourcePage: '空间模板克隆',
+    notes: `从模板「${templateName}」克隆创建空间，包含：${cloneSummaryParts.join('、') || '空配置'}${clearBusinessFlow ? '（已清空业务流水）' : ''}`,
+    relatedEntityType: '',
+    relatedEntityId: '',
+    relatedEntityName: templateName,
+    isClonedFromTemplate: true
+  };
+  result.eventLogs.unshift(cloneEvent);
+
   return result;
 }
 
 export function isTemplateData(data) {
   return data && typeof data === 'object' && data._isTemplate === true;
+}
+
+export function isClonedSpaceData(data) {
+  return data && typeof data === 'object' && !!data._clonedFromTemplate;
 }
 
 export function getSpaceList() {
@@ -537,6 +604,14 @@ export function buildExportData(spaceData, spaceInfo = null) {
     _exportedAt: new Date().toISOString(),
     _spaceInfo: spaceInfo
   };
+  if (spaceInfo && spaceInfo._clonedFromTemplate) {
+    result._clonedFromTemplate = spaceInfo._clonedFromTemplate;
+  }
+  if (spaceData && spaceData._isTemplate === true) {
+    result._isTemplate = true;
+    result._templateId = spaceData._templateId || '';
+    result._templateName = spaceData._templateName || '';
+  }
   DATA_ENTITIES.forEach((key) => {
     if (spaceData[key] !== undefined && Array.isArray(spaceData[key])) {
       result[key] = spaceData[key];

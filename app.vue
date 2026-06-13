@@ -17,12 +17,14 @@ import {
   SPACE_LIST_KEY,
   CURRENT_SPACE_KEY,
   SPACE_DATA_PREFIX,
+  TEMPLATE_LIST_KEY,
   hasOldData,
   iso,
   useSpaceStorage,
   TEMPLATE_ENTITY_LABELS,
   TEMPLATE_CONFIG_ENTITY_LABELS,
-  TEMPLATE_BUSINESS_ENTITY_LABELS
+  TEMPLATE_BUSINESS_ENTITY_LABELS,
+  OLD_KEYS
 } from './composables/useSpaceStorage.js';
 
 const storage = useSpaceStorage();
@@ -387,6 +389,13 @@ function migrateOldDataToDefaultSpace() {
   localStorage.setItem(SPACE_LIST_KEY, JSON.stringify([defaultSpace]));
   localStorage.setItem(CURRENT_SPACE_KEY, defaultSpaceId);
   localStorage.setItem(SPACE_DATA_PREFIX + defaultSpaceId, JSON.stringify(spacePayload));
+
+  const existingTemplateList = safeParseJSON(localStorage.getItem(TEMPLATE_LIST_KEY), null);
+  if (existingTemplateList && Array.isArray(existingTemplateList) && existingTemplateList.length > 0) {
+    warnings.push(`发现 ${existingTemplateList.length} 个已保存的空间模板，已保留`);
+  }
+
+  OLD_KEYS.forEach((key) => localStorage.removeItem(key));
 
   const msg = warnings.length > 0
     ? `已迁移旧数据到「默认社群」。${warnings.join('；')}。如数据异常，可在空间设置中重置。`

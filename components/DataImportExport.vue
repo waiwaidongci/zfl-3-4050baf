@@ -176,7 +176,7 @@ async function processFile(file) {
         errors: ['JSON 解析失败：文件内容不是有效的 JSON 格式'],
         warnings: [],
         data: null,
-        summary: { totalWarnings: 0, hasLegacyFormat: false }
+        summary: { totalWarnings: 0, hasLegacyFormat: false, isTemplateFormat: false, isClonedSpace: false }
       };
       return;
     }
@@ -187,7 +187,7 @@ async function processFile(file) {
       errors: [`读取文件失败：${e.message}`],
       warnings: [],
       data: null,
-      summary: { totalWarnings: 0, hasLegacyFormat: false }
+      summary: { totalWarnings: 0, hasLegacyFormat: false, isTemplateFormat: false, isClonedSpace: false }
     };
   }
 }
