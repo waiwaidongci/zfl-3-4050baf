@@ -1165,3 +1165,60 @@ export function validateAndNormalizeForMerge(rawData, currentData) {
     mergeAnalysis
   };
 }
+
+export function buildEmptyPreviewResult(errors = []) {
+  return {
+    valid: false,
+    errors: Array.isArray(errors) ? errors : [],
+    warnings: [],
+    data: null,
+    summary: {
+      totalWarnings: 0,
+      hasLegacyFormat: false,
+      isTemplateFormat: false,
+      templateName: '',
+      isClonedSpace: false,
+      clonedFromTemplateId: ''
+    }
+  };
+}
+
+export function buildImportPreviewResult(rawData, currentData) {
+  if (rawData === null || rawData === undefined) {
+    return buildEmptyPreviewResult(['JSON 解析失败：文件内容不是有效的 JSON 格式']);
+  }
+  if (typeof rawData !== 'object') {
+    return buildEmptyPreviewResult(['导入文件格式错误：根数据不是对象']);
+  }
+  return validateAndNormalizeForMerge(rawData, currentData);
+}
+
+export function buildEntitySummaryFromImported(importedData) {
+  if (!importedData || typeof importedData !== 'object') return {};
+  const summary = {};
+  DATA_ENTITIES.forEach((key) => {
+    if (importedData[key] !== undefined && Array.isArray(importedData[key])) {
+      summary[key] = importedData[key].length;
+    }
+  });
+  return summary;
+}
+
+export function applyOverwriteToData(targetData, importedData) {
+  if (!targetData || typeof targetData !== 'object') {
+    targetData = {};
+  }
+  if (!importedData || typeof importedData !== 'object') {
+    return { ...targetData };
+  }
+  const result = { ...targetData };
+  DATA_ENTITIES.forEach((key) => {
+    if (importedData[key] !== undefined) {
+      result[key] = Array.isArray(importedData[key]) ? [...importedData[key]] : importedData[key];
+    }
+  });
+  return result;
+}
+
+
+

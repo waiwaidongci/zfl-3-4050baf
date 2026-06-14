@@ -68,7 +68,7 @@
 import { ref, computed } from 'vue';
 import ImportPreview from './ImportPreview.vue';
 import { buildExportData, downloadJSON, readFileAsText, safeParseJSON } from '../composables/useSpaceStorage.js';
-import { validateAndNormalizeForMerge, DATA_ENTITIES, ENTITY_LABELS } from '../utils/dataTransform.js';
+import { buildImportPreviewResult, DATA_ENTITIES, ENTITY_LABELS } from '../utils/dataTransform.js';
 
 const props = defineProps({
   spaceData: {
@@ -170,17 +170,7 @@ async function processFile(file) {
   try {
     const text = await readFileAsText(file);
     const rawData = safeParseJSON(text, null);
-    if (rawData === null) {
-      previewResult.value = {
-        valid: false,
-        errors: ['JSON 解析失败：文件内容不是有效的 JSON 格式'],
-        warnings: [],
-        data: null,
-        summary: { totalWarnings: 0, hasLegacyFormat: false, isTemplateFormat: false, isClonedSpace: false }
-      };
-      return;
-    }
-    previewResult.value = validateAndNormalizeForMerge(rawData, props.spaceData);
+    previewResult.value = buildImportPreviewResult(rawData, props.spaceData);
   } catch (e) {
     previewResult.value = {
       valid: false,
