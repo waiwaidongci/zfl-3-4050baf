@@ -457,3 +457,71 @@ describe('inventoryTransform - 押金扣除载荷与应用', () => {
     expect(Number(result.deposit.deductedAmount)).toBe(50);
   });
 });
+
+describe('inventoryTransform - 旧数据兼容（缺少items）', () => {
+  it('getInventoryStats 当items缺失时返回全0统计', () => {
+    const list = {
+      id: 'inv-old',
+      name: '旧版盘点单',
+      status: '已完成'
+    };
+    const stats = getInventoryStats(list);
+    expect(stats.total).toBe(0);
+    expect(stats.checked).toBe(0);
+    expect(stats.missing).toBe(0);
+    expect(stats.pending).toBe(0);
+    expect(stats.progress).toBe(0);
+  });
+
+  it('getAbnormalItems 当items缺失时返回空数组', () => {
+    const list = { id: 'inv-old', name: '旧版盘点单' };
+    const result = getAbnormalItems(list);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(0);
+  });
+
+  it('getPendingDepositDeductions 当盘点单items缺失时不崩溃', () => {
+    const lists = [
+      { id: 'inv-1', type: '出行后', name: '旧盘点1' },
+      {
+        id: 'inv-2',
+        type: '出行后',
+        name: '正常盘点',
+        items: [
+          {
+            id: 'item-1',
+            gearId: 'g1',
+            gearName: '帐篷',
+            owner: '张三',
+            abnormalActions: [
+              {
+                id: 'a1',
+                type: '押金扣除',
+                status: '待处理',
+                amount: '100',
+                borrower: '李四',
+                description: '损坏赔偿'
+              }
+            ]
+          }
+        ]
+      },
+      { id: 'inv-3', type: '出行后', name: '旧盘点2', items: null }
+    ];
+
+    const result = getPendingDepositDeductions(lists);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].inventoryName).toBe('正常盘点');
+  });
+
+  it('getPendingDepositDeductions 完全没有items字段时返回空数组', () => {
+    const lists = [
+      { id: 'inv-1', type: '出行后', name: '旧盘点1' },
+      { id: 'inv-2', type: '出行后', name: '旧盘点2', items: undefined }
+    ];
+    const result = getPendingDepositDeductions(lists);
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(0);
+  });
+});

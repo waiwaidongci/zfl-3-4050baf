@@ -21,7 +21,9 @@
     "typecheck": "nuxi typecheck 2>/dev/null || echo 'typecheck skipped'",
     "lint": "echo 'lint: no linter configured yet'",
     "quality": "npm run test:unit && npm run test:coverage && npm run build:check",
-    "quality:ci": "npm run test:unit -- --reporter=junit --reporter=verbose && npm run test:coverage && npm run build:check"
+    "quality:full": "npm run quality && npm run test:browser-smoke",
+    "quality:ci": "npm run test:unit -- --reporter=junit --reporter=verbose && npm run test:coverage && npm run build:check",
+    "test:browser-smoke": "node scripts/browser-smoke.mjs"
   },
   "dependencies": {
     "nuxt": "^3.17.0",

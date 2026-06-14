@@ -61,6 +61,15 @@ npm run quality
 
 失败时会输出具体失败的模块和用例，便于定位问题。
 
+### 完整质量门禁（含浏览器冒烟）
+
+```bash
+npm run quality:full
+```
+
+在基础质量门禁之上，增加：
+4. **浏览器冒烟测试** - 启动开发服务器，验证页面可访问、导航正常、模块完整
+
 ### CI 环境命令
 
 ```bash
@@ -73,12 +82,13 @@ CI 模式下输出 JUnit 格式的测试报告，便于集成到 CI/CD 流水线
 
 ### 测试分层
 
-| 层级 | 目录 | 说明 | 运行命令 |
+| 层级 | 目录/脚本 | 说明 | 运行命令 |
 |------|------|------|----------|
 | 工具函数测试 | `tests/utils/` | 纯函数单元测试，覆盖核心业务逻辑 | `npm run test:utils` |
 | 组合式函数测试 | `tests/composables/` | Vue composable 集成测试 | `npm run test:composables` |
 | 集成测试 | `tests/integration/` | 跨模块链路测试 | `npm run test:integration` |
 | 冒烟测试 | `tests/smoke/` | 核心链路快速验证 + 组件渲染 | `npm run test:smoke` |
+| 浏览器自动化冒烟 | `scripts/browser-smoke.mjs` | 真实 HTTP 服务验证，检查页面加载和导航 | `npm run test:browser-smoke` |
 
 ### 重点测试链路
 
@@ -165,6 +175,9 @@ npm run test:smoke
 
 # 数据导入导出回归测试
 npm run test:import-export
+
+# 浏览器自动化冒烟测试
+npm run test:browser-smoke
 ```
 
 ### 覆盖率阈值
@@ -236,12 +249,64 @@ zfl-3/
 
 ## 浏览器冒烟验证
 
-如需进行真实浏览器冒烟验证：
+### 命令行自动化（推荐）
 
+一条命令完成浏览器自动化冒烟验证：
+
+```bash
+npm run test:browser-smoke
+```
+
+该脚本会：
+1. 自动启动 Nuxt 开发服务器（端口 5189，不影响默认开发端口）
+2. 验证首页 HTTP 200 响应
+3. 检查页面标题「露营装备共享社群」
+4. 验证 Vue/Nuxt 应用标记存在
+5. 检查 4 个核心模块导航按钮（装备盘点、费用结算、预约排程、数据导入导出）
+6. 验证页面脚本加载正常
+7. 检测页面无服务端错误信息
+8. 验证静态资源可访问
+9. 自动关闭服务器并输出通过/失败报告
+
+失败时会输出具体失败的检查项名称和原因，便于定位。
+
+### 真实浏览器手动验证（集成 MCP 浏览器）
+
+如需进行更深层的真实浏览器 DOM 交互验证，可使用集成浏览器工具验证以下项目：
+
+✅ 已验证通过的浏览器冒烟检查项：
+
+| 检查项 | 结果 | 说明 |
+|--------|------|------|
+| 页面标题正确 | ✅ | 「露营装备共享社群」 |
+| 控制台无错误 | ✅ | 仅一条 Vue Suspense info 级别消息 |
+| 装备盘点面板切换 | ✅ | 正常渲染「新建盘点单」和表单控件 |
+| 预约排程面板切换 | ✅ | 正常渲染「提交候补预约」和「候补转正审核」 |
+| 费用结算面板切换 | ✅ | 正常渲染「新建结算单」和成员勾选控件 |
+| 数据导入导出面板切换 | ✅ | 正常渲染「数据导出」「数据导入」选项 |
+| 18 个导航按钮完整 | ✅ | 覆盖所有功能模块 |
+| 核心交互元素渲染 | ✅ | heading、button、combobox、textbox 正常 |
+
+手动验证步骤：
 1. 启动开发服务器：`npm run dev`
-2. 访问 `http://localhost:5173`
-3. 检查页面是否正常加载、各面板是否可切换
-4. 验证核心功能：创建装备、提交申请、创建盘点、生成结算单
+2. 访问 `http://localhost:5173`（或实际启动端口）
+3. 依次点击导航栏：装备盘点 → 预约排程 → 费用结算 → 数据导入导出
+4. 确认每个面板正常渲染，无控制台错误
+5. 验证核心功能：创建装备、提交申请、创建盘点、生成结算单
+
+## 旧数据兼容性
+
+系统已对历史数据格式做了兼容性修复，避免崩溃：
+
+| 场景 | 处理方式 |
+|------|----------|
+| 盘点单缺少 `items` 字段（undefined/null/非数组） | 自动兜底为空数组 `[]` |
+| 工具函数访问不存在的 items | `getInventoryStats`/`getAbnormalItems`/`getPendingDepositDeductions` 均做防御性检查 |
+| lists computed 自动异常标记刷新 | 对 items 先做 Array.isArray 检查再遍历 |
+
+新增兼容性测试：
+- [tests/composables/useInventory.test.js](tests/composables/useInventory.test.js) - 7 个旧数据兼容测试
+- [tests/utils/inventoryTransform.test.js](tests/utils/inventoryTransform.test.js) - 4 个旧数据兼容测试
 
 ## License
 

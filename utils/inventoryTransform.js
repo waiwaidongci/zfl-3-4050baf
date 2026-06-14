@@ -79,7 +79,8 @@ export function getPendingDepositDeductions(inventoryLists, tripId = null) {
     : inventoryLists.filter((l) => l.type === '出行后');
 
   for (const list of lists) {
-    for (const item of list.items) {
+    const items = Array.isArray(list.items) ? list.items : [];
+    for (const item of items) {
       (item.abnormalActions || []).forEach((action) => {
         if (action.type === '押金扣除' && action.status === '待处理') {
           const amount = Number(action.amount) || 0;

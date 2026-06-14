@@ -593,3 +593,194 @@ describe('useInventory - 创建盘点单', () => {
     expect(result).toBeNull();
   });
 });
+
+describe('useInventory - 旧数据兼容（缺少items）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-14T12:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('lists computed 当盘点单items为undefined时不崩溃，返回空数组', () => {
+    const oldLists = ref([
+      { id: 'inv-old', name: '旧版盘点单', status: '进行中' },
+      { id: 'inv-old2', name: '旧版盘点单2', status: '已完成', items: undefined }
+    ]);
+
+    const { lists, inventoryCount, completedCount, pendingCount } = useInventory({
+      inventoryLists: oldLists,
+      gears: ref([]),
+      trips: ref([]),
+      members: ref([]),
+      currentUser: ref('张三')
+    });
+
+    expect(Array.isArray(lists.value)).toBe(true);
+    expect(lists.value).toHaveLength(2);
+    expect(Array.isArray(lists.value[0].items)).toBe(true);
+    expect(lists.value[0].items).toHaveLength(0);
+    expect(Array.isArray(lists.value[1].items)).toBe(true);
+    expect(lists.value[1].items).toHaveLength(0);
+    expect(inventoryCount.value).toBe(2);
+    expect(completedCount.value).toBe(1);
+    expect(pendingCount.value).toBe(1);
+  });
+
+  it('lists computed 当盘点单items为null时不崩溃', () => {
+    const oldLists = ref([
+      { id: 'inv-null', name: '空items盘点', status: '进行中', items: null },
+      {
+        id: 'inv-normal',
+        name: '正常盘点',
+        status: '进行中',
+        items: [createMockInventoryItem({ gearName: '帐篷', checkStatus: '已盘点' })]
+      }
+    ]);
+
+    const { lists } = useInventory({
+      inventoryLists: oldLists,
+      gears: ref([]),
+      trips: ref([]),
+      members: ref([]),
+      currentUser: ref('张三')
+    });
+
+    expect(lists.value[0].items).toHaveLength(0);
+    expect(lists.value[1].items).toHaveLength(1);
+    expect(lists.value[1].items[0].gearName).toBe('帐篷');
+  });
+
+  it('lists computed 当盘点单items不是数组时不崩溃', () => {
+    const oldLists = ref([
+      { id: 'inv-bad', name: '异常格式盘点', status: '进行中', items: '不是数组' },
+      { id: 'inv-bad2', name: '异常格式盘点2', status: '进行中', items: 123 }
+    ]);
+
+    const { lists } = useInventory({
+      inventoryLists: oldLists,
+      gears: ref([]),
+      trips: ref([]),
+      members: ref([]),
+      currentUser: ref('张三')
+    });
+
+    expect(Array.isArray(lists.value[0].items)).toBe(true);
+    expect(lists.value[0].items).toHaveLength(0);
+    expect(Array.isArray(lists.value[1].items)).toBe(true);
+    expect(lists.value[1].items).toHaveLength(0);
+  });
+
+  it('getStats 旧数据无items时返回全0统计', () => {
+    const oldLists = ref([
+      { id: 'inv-old', name: '旧版盘点单', status: '进行中' }
+    ]);
+
+    const { getStats } = useInventory({
+      inventoryLists: oldLists,
+      gears: ref([]),
+      trips: ref([]),
+      members: ref([]),
+      currentUser: ref('张三')
+    });
+
+    const stats = getStats('inv-old');
+    expect(stats.total).toBe(0);
+    expect(stats.progress).toBe(0);
+  });
+
+  it('addGearToList 旧盘点单无items时可以正常添加装备', () => {
+    const gear = createMockGear({ id: 'gear-001', name: '帐篷' });
+    const oldLists = ref([
+      { id: 'inv-old', name: '旧版盘点单', status: '进行中' }
+    ]);
+
+    const { addGearToList } = useInventory({
+      inventoryLists: oldLists,
+      gears: ref([gear]),
+      trips: ref([]),
+      members: ref([]),
+      currentUser: ref('张三')
+    });
+
+    const result = addGearToList('inv-old', 'gear-001');
+    expect(result).not.toBeNull();
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].gearName).toBe('帐篷');
+  });
+
+  it('lastInventoryByGear 旧数据无items时不崩溃', () => {
+    const oldLists = ref([
+      { id: 'inv-old', name: '旧版盘点单', status: '已完成', date: '2026-06-01' },
+      {
+        id: 'inv-new',
+        name: '新版盘点单',
+        status: '已完成',
+        date: '2026-06-10',
+        items: [
+          createMockInventoryItem({
+            gearId: 'g1',
+            gearName: '帐篷',
+            checkStatus: '已盘点',
+            checker: '张三'
+          })
+        ]
+      }
+    ]);
+
+    const { lastInventoryByGear } = useInventory({
+      inventoryLists: oldLists,
+      gears: ref([]),
+      trips: ref([]),
+      members: ref([]),
+      currentUser: ref('张三')
+    });
+
+    expect(typeof lastInventoryByGear.value).toBe('object');
+    expect(lastInventoryByGear.value['g1']).toBeDefined();
+    expect(lastInventoryByGear.value['g1'].inventoryName).toBe('新版盘点单');
+  });
+
+  it('getPendingAbnormalActions 旧数据无items时不崩溃', () => {
+    const oldLists = ref([
+      { id: 'inv-old', name: '旧版盘点单', status: '已完成', type: '出行后' },
+      {
+        id: 'inv-new',
+        name: '新版盘点单',
+        status: '已完成',
+        type: '出行后',
+        items: [
+          createMockInventoryItem({
+            gearId: 'g1',
+            gearName: '帐篷',
+            owner: '李四',
+            abnormalActions: [
+              {
+                id: 'a1',
+                type: '押金扣除',
+                status: '待处理',
+                amount: '50',
+                description: '损坏',
+                borrower: '王五'
+              }
+            ]
+          })
+        ]
+      }
+    ]);
+
+    const { getPendingAbnormalActions } = useInventory({
+      inventoryLists: oldLists,
+      gears: ref([]),
+      trips: ref([]),
+      members: ref([]),
+      currentUser: ref('张三')
+    });
+
+    const actions = getPendingAbnormalActions();
+    expect(Array.isArray(actions)).toBe(true);
+    expect(actions.length).toBeGreaterThanOrEqual(1);
+  });
+});
