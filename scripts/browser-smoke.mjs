@@ -1,246 +1,228 @@
 #!/usr/bin/env node
 
-import { spawn } from 'child_process';
-import http from 'http';
+import { spawn } from 'node:child_process';
+import http from 'node:http';
+import { chromium } from 'playwright';
 
-const PORT = 5189;
-const BASE_URL = `http://localhost:${PORT}`;
+const PORT = Number(process.env.BROWSER_SMOKE_PORT || 5189);
+const HOST = '127.0.0.1';
+const BASE_URL = `http://${HOST}:${PORT}`;
 const STARTUP_TIMEOUT = 60000;
-const CHECK_INTERVAL = 2000;
+const CHECK_INTERVAL = 1000;
 
 const PASSED = [];
 const FAILED = [];
 
-function log(msg) {
-  console.log(`[browser-smoke] ${msg}`);
+function log(message) {
+  console.log(`[browser-smoke] ${message}`);
 }
 
 function logPass(name) {
   PASSED.push(name);
-  console.log(`  ✅ PASS: ${name}`);
+  console.log(`  PASS: ${name}`);
 }
 
 function logFail(name, detail = '') {
   FAILED.push({ name, detail });
-  console.log(`  ❌ FAIL: ${name}${detail ? ` - ${detail}` : ''}`);
+  console.log(`  FAIL: ${name}${detail ? ` - ${detail}` : ''}`);
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function httpGet(url, timeout = 10000) {
+function httpGet(url, timeout = 5000) {
   return new Promise((resolve, reject) => {
     const req = http.get(url, { timeout }, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => resolve({ statusCode: res.statusCode, body: data, headers: res.headers }));
+      res.resume();
+      res.on('end', () => resolve(res.statusCode || 0));
     });
-    req.on('timeout', () => { req.destroy(new Error('Request timeout')); });
+    req.on('timeout', () => req.destroy(new Error('Request timeout')));
     req.on('error', reject);
   });
 }
 
 function startDevServer() {
-  return new Promise((resolve, reject) => {
-    log(`Starting Nuxt dev server on port ${PORT}...`);
-
-    const serverProc = spawn('npx', ['nuxt', 'dev', '--port', String(PORT), '--host', '127.0.0.1'], {
+  const serverProc = spawn(
+    'npx',
+    ['nuxt', 'dev', '--port', String(PORT), '--host', HOST],
+    {
       cwd: process.cwd(),
       env: { ...process.env, PORT: String(PORT), NODE_ENV: 'development' },
       stdio: ['ignore', 'pipe', 'pipe']
-    });
+    }
+  );
 
-    let resolved = false;
-    let outputBuffer = '';
-
-    const cleanup = () => {
-      serverProc.stdout.removeAllListeners();
-      serverProc.stderr.removeAllListeners();
-      serverProc.removeAllListeners();
-    };
-
-    const onData = (chunk) => {
-      const text = chunk.toString();
-      outputBuffer += text;
-      if (text.includes('Nitro server built') || text.includes('Vite client warmed up') || text.includes('ready')) {
-        if (!resolved) {
-          resolved = true;
-          cleanup();
-          resolve(serverProc);
-        }
-      }
-    };
-
-    serverProc.stdout.on('data', onData);
-    serverProc.stderr.on('data', onData);
-
-    serverProc.on('error', (err) => {
-      if (!resolved) {
-        resolved = true;
-        reject(new Error(`Failed to start dev server: ${err.message}`));
-      }
-    });
-
-    serverProc.on('exit', (code) => {
-      if (!resolved) {
-        resolved = true;
-        reject(new Error(`Dev server exited early with code ${code}. Output: ${outputBuffer.slice(-1000)}`));
-      }
-    });
+  serverProc.stdout.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (process.env.BROWSER_SMOKE_VERBOSE) process.stdout.write(text);
   });
+
+  serverProc.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (process.env.BROWSER_SMOKE_VERBOSE) process.stderr.write(text);
+  });
+
+  return serverProc;
 }
 
-function check(description, fn) {
-  return async () => {
-    try {
-      const result = await fn();
-      if (result === true || (typeof result === 'string' && result.length === 0)) {
-        logPass(description);
-        return true;
-      } else {
-        logFail(description, typeof result === 'string' ? result : '');
-        return false;
-      }
-    } catch (e) {
-      logFail(description, e.message);
-      return false;
-    }
-  };
-}
-
-const TESTS = [
-  check('首页 HTTP 200 响应', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    return res.statusCode === 200 ? true : `Status ${res.statusCode}`;
-  }),
-
-  check('页面标题包含「露营装备共享社群」', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    return res.body.includes('露营装备共享社群') ? true : '标题缺失';
-  }),
-
-  check('页面包含 Vue/Nuxt 应用标记', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    const hasMarker = res.body.includes('__NUXT__') || res.body.includes('data-v-app') || res.body.includes('/_nuxt/');
-    return hasMarker ? true : '未检测到应用标记';
-  }),
-
-  check('页面包含导航按钮「装备盘点」', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    return res.body.includes('装备盘点') ? true : '装备盘点按钮缺失';
-  }),
-
-  check('页面包含导航按钮「费用结算」', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    return res.body.includes('费用结算') ? true : '费用结算按钮缺失';
-  }),
-
-  check('页面包含导航按钮「预约排程」', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    return res.body.includes('预约排程') ? true : '预约排程按钮缺失';
-  }),
-
-  check('页面包含导航按钮「数据导入导出」', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    return res.body.includes('数据导入导出') ? true : '数据导入导出按钮缺失';
-  }),
-
-  check('页面包含核心模块脚本加载', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    const hasScripts = res.body.includes('entry') && res.body.includes('.js');
-    return hasScripts ? true : '核心脚本缺失';
-  }),
-
-  check('页面不包含服务端错误信息', async () => {
-    const res = await httpGet(`${BASE_URL}/`);
-    const hasError = res.body.includes('stack trace') || res.body.includes('Error:') || res.body.includes('500');
-    return !hasError ? true : '检测到服务端错误';
-  }),
-
-  check('静态资源可访问', async () => {
-    try {
-      const manifest = await httpGet(`${BASE_URL}/_nuxt/builds/latest.json`, 5000);
-      if (manifest.statusCode === 200) return true;
-      const entry = await httpGet(`${BASE_URL}/`, 5000);
-      return entry.statusCode === 200 ? true : 'manifest 无法访问';
-    } catch {
-      return true;
-    }
-  })
-];
-
-async function runTests() {
-  log('='.repeat(60));
-  log('Browser Smoke Tests - 浏览器冒烟测试开始');
-  log('='.repeat(60));
-  log('启动开发服务器...');
-
-  let serverProc;
-  try {
-    serverProc = await startDevServer();
-  } catch (e) {
-    logFail('启动开发服务器', e.message);
-    process.exit(1);
-  }
-
-  log('开发服务器启动成功');
-
-  log('等待服务器就绪...');
+async function waitForServer(serverProc) {
   const startTime = Date.now();
-  let ready = false;
+  let earlyExit = null;
+
+  serverProc.once('exit', (code) => {
+    earlyExit = code;
+  });
+
   while (Date.now() - startTime < STARTUP_TIMEOUT) {
-    try {
-      const res = await httpGet(`${BASE_URL}/`, 3000);
-      if (res.statusCode === 200) {
-        ready = true;
-        break;
-      }
-    } catch {
-      await sleep(CHECK_INTERVAL);
+    if (earlyExit !== null) {
+      throw new Error(`Dev server exited early with code ${earlyExit}`);
     }
+
+    try {
+      const status = await httpGet(`${BASE_URL}/`);
+      if (status >= 200 && status < 500) return;
+    } catch {
+      // Keep polling until the startup timeout expires.
+    }
+
     await sleep(CHECK_INTERVAL);
   }
 
-  if (!ready) {
-    logFail('服务器就绪超时');
-    serverProc.kill('SIGTERM');
-    process.exit(1);
-  }
-  logPass('服务器就绪');
-
-  console.log('');
-  log('执行测试用例:');
-  console.log('');
-
-  for (const test of TESTS) {
-    await test();
-  }
-
-  console.log('');
-  log('='.repeat(60));
-  log(`测试完成: 通过 ${PASSED.length}/${TESTS.length}, 失败 ${FAILED.length}/${TESTS.length}`);
-
-  if (FAILED.length > 0) {
-    console.log('');
-    log('失败用例详情:');
-    FAILED.forEach((f, i) => {
-      console.log(`  ${i + 1}. ${f.name}${f.detail ? `: ${f.detail}` : ''}`);
-    });
-  }
-
-  log('关闭开发服务器...');
-  serverProc.kill('SIGTERM');
-
-  setTimeout(() => {
-    const exitCode = FAILED.length === 0 ? 0 : 1;
-    log(`浏览器冒烟测试${FAILED.length === 0 ? '全部通过' : '存在失败'}`);
-    process.exit(exitCode);
-  }, 2000);
+  throw new Error(`Timed out waiting for ${BASE_URL}`);
 }
 
-runTests().catch((e) => {
-  console.error('[browser-smoke] Fatal error:', e);
+async function runCheck(name, fn) {
+  try {
+    await fn();
+    logPass(name);
+  } catch (error) {
+    logFail(name, error.message);
+  }
+}
+
+async function clickNav(page, label, expectedText) {
+  const button = page.getByRole('button', { name: label });
+  await button.click();
+  await page.getByText(expectedText).first().waitFor({ state: 'visible', timeout: 10000 });
+}
+
+async function runBrowserChecks() {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await context.addInitScript(() => {
+    localStorage.clear();
+    localStorage.setItem('zfl-3-spaces', '[]');
+    localStorage.removeItem('zfl-3-current-space');
+  });
+  const page = await context.newPage();
+  const consoleErrors = [];
+  const pageErrors = [];
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => {
+    pageErrors.push(error.message);
+  });
+
+  try {
+    await runCheck('首页可在真实浏览器中打开', async () => {
+      await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.getByText('露营装备共享社群').first().waitFor({ state: 'visible', timeout: 10000 });
+    });
+
+    await runCheck('页面标题正确', async () => {
+      const title = await page.title();
+      if (title !== '露营装备共享社群') {
+        throw new Error(`Unexpected title: ${title}`);
+      }
+    });
+
+    await runCheck('装备盘点面板可点击渲染', async () => {
+      await clickNav(page, '装备盘点', '新建盘点单');
+    });
+
+    await runCheck('预约排程面板可点击渲染', async () => {
+      await clickNav(page, '预约排程', '提交候补预约');
+    });
+
+    await runCheck('费用结算面板可点击渲染', async () => {
+      await clickNav(page, '费用结算', '新建结算单');
+    });
+
+    await runCheck('数据导入导出面板可点击渲染', async () => {
+      await clickNav(page, '数据导入导出', '数据导出');
+      await page.getByText('数据导入').first().waitFor({ state: 'visible', timeout: 10000 });
+    });
+
+    await runCheck('浏览器控制台无错误', async () => {
+      if (consoleErrors.length > 0 || pageErrors.length > 0) {
+        throw new Error([...consoleErrors, ...pageErrors].join(' | '));
+      }
+    });
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+}
+
+async function stopServer(serverProc) {
+  if (!serverProc || serverProc.killed) return;
+
+  serverProc.kill('SIGTERM');
+  const exited = await Promise.race([
+    new Promise((resolve) => serverProc.once('exit', resolve)),
+    sleep(5000).then(() => false)
+  ]);
+
+  if (exited === false && !serverProc.killed) {
+    serverProc.kill('SIGKILL');
+  }
+}
+
+async function run() {
+  log('='.repeat(60));
+  log('Browser Smoke Tests - 真实浏览器冒烟测试开始');
+  log('='.repeat(60));
+
+  let serverProc;
+  try {
+    log(`启动 Nuxt 开发服务器：${BASE_URL}`);
+    serverProc = startDevServer();
+    await waitForServer(serverProc);
+    logPass('服务器就绪');
+
+    await runBrowserChecks();
+
+    log('='.repeat(60));
+    log(`测试完成: 通过 ${PASSED.length}, 失败 ${FAILED.length}`);
+
+    if (FAILED.length > 0) {
+      log('失败用例详情:');
+      FAILED.forEach((failure, index) => {
+        console.log(`  ${index + 1}. ${failure.name}${failure.detail ? `: ${failure.detail}` : ''}`);
+      });
+      process.exitCode = 1;
+    }
+  } catch (error) {
+    logFail('浏览器冒烟测试执行', error.message);
+    process.exitCode = 1;
+  } finally {
+    log('关闭开发服务器...');
+    await stopServer(serverProc);
+  }
+
+  if (process.exitCode) {
+    log('浏览器冒烟测试存在失败');
+  } else {
+    log('浏览器冒烟测试全部通过');
+  }
+}
+
+run().catch((error) => {
+  console.error('[browser-smoke] Fatal error:', error);
   process.exit(1);
 });
