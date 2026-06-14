@@ -67,7 +67,7 @@
 <script setup>
 import { ref, computed } from 'vue';
 import ImportPreview from './ImportPreview.vue';
-import { buildExportData, downloadJSON, readFileAsText, safeParseJSON } from '../composables/useSpaceStorage.js';
+import { buildExportData, downloadJSON, readFileAsText, safeParseJSON, buildExportEventNote } from '../composables/useSpaceStorage.js';
 import { buildImportPreviewResult, DATA_ENTITIES, ENTITY_LABELS } from '../utils/dataTransform.js';
 
 const props = defineProps({
@@ -132,7 +132,7 @@ function handleExport() {
       summary: exportSummary
     },
     sourcePage: '数据导入导出',
-    notes: `导出数据：${exportSummary}`
+    notes: buildExportEventNote(selectedExportEntities.value, props.spaceData)
   });
   
   downloadJSON(data, filename);

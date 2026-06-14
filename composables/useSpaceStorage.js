@@ -13,8 +13,7 @@ import {
   DATA_ENTITIES,
   performMerge,
   applyOverwriteToData,
-  ENTITY_LABELS,
-  buildEntitySummaryFromImported
+  ENTITY_LABELS
 } from '../utils/dataTransform.js';
 import { normalizeReservations } from '../utils/reservationTransform.js';
 
@@ -643,6 +642,30 @@ export function mergeImportData(targetData, importedData, mode = 'overwrite', me
   return applyOverwriteToData(targetData, importedData);
 }
 
+export function buildExportEventNote(selectedEntities, spaceData) {
+  const parts = [];
+  const entities = selectedEntities || DATA_ENTITIES;
+  entities.forEach((key) => {
+    const arr = spaceData && spaceData[key];
+    const count = Array.isArray(arr) ? arr.length : 0;
+    parts.push(`${ENTITY_LABELS[key] || key}(${count})`);
+  });
+  return `导出数据：${parts.join(', ') || '无数据'}`;
+}
+
+export function buildImportEventNote(mode, mergeAnalysis = null) {
+  if (mode === 'merge' && mergeAnalysis && mergeAnalysis.summary) {
+    const s = mergeAnalysis.summary;
+    const parts = [];
+    if (s.totalAdded) parts.push(`新增${s.totalAdded}条`);
+    if (s.totalUpdated) parts.push(`更新${s.totalUpdated}条`);
+    if (s.totalSkipped) parts.push(`跳过${s.totalSkipped}条`);
+    if (s.totalUnmatched) parts.push(`无法匹配${s.totalUnmatched}条`);
+    return `合并导入成功：${parts.length ? parts.join('、') : '无变动'}`;
+  }
+  return '覆盖导入成功，已替换空间所有数据';
+}
+
 export function downloadJSON(data, filename) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -815,39 +838,6 @@ export function useSpaceStorage() {
 
     saveSpace(spaceId);
     return { success: true, stats };
-  }
-
-  function buildModeActionSummary(mode, importedData, mergeAnalysis) {
-    const safeImported = importedData && typeof importedData === 'object' ? importedData : {};
-    if (mode === 'merge' && mergeAnalysis && mergeAnalysis.summary) {
-      const s = mergeAnalysis.summary;
-      const parts = [];
-      if (s.totalAdded) parts.push(`新增${s.totalAdded}条`);
-      if (s.totalUpdated) parts.push(`更新${s.totalUpdated}条`);
-      if (s.totalSkipped) parts.push(`跳过${s.totalSkipped}条`);
-      if (s.totalUnmatched) parts.push(`无法匹配${s.totalUnmatched}条`);
-      return `合并导入：${parts.length ? parts.join('、') : '无变动'}`;
-    }
-    const entityCountMap = buildEntitySummaryFromImported(safeImported);
-    const entityParts = Object.entries(entityCountMap)
-      .filter(([, v]) => typeof v === 'number' && v > 0)
-      .map(([k, v]) => `${ENTITY_LABELS[k] || k}${v}条`);
-    return `覆盖导入：${entityParts.length ? entityParts.join('、') : '无数据包含'}`;
-  }
-
-  function buildImportEventNote(mode, importedData, mergeAnalysis) {
-    return buildModeActionSummary(mode, importedData, mergeAnalysis);
-  }
-
-  function buildExportEventNote(selectedEntities, spaceData) {
-    const parts = [];
-    const entities = selectedEntities || DATA_ENTITIES;
-    entities.forEach((key) => {
-      const arr = spaceData && spaceData[key];
-      const count = Array.isArray(arr) ? arr.length : 0;
-      parts.push(`${ENTITY_LABELS[key] || key}(${count})`);
-    });
-    return `导出数据：${parts.join('、') || '无数据'}；`;
   }
 
   function exportFromSpace(spaceId, selectedEntities = null) {

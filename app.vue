@@ -33,7 +33,8 @@ import {
   TEMPLATE_ENTITY_LABELS,
   TEMPLATE_CONFIG_ENTITY_LABELS,
   TEMPLATE_BUSINESS_ENTITY_LABELS,
-  OLD_KEYS
+  OLD_KEYS,
+  buildImportEventNote
 } from './composables/useSpaceStorage.js';
 
 const storage = useSpaceStorage();
@@ -508,9 +509,7 @@ function handleDataImported(payload) {
   const beforeSpace = spaces.value.find((s) => s.id === currentSpaceId.value);
   const result = importSpaceData(currentSpaceId.value, data, mode, mergeAnalysis);
   if (result && result.success) {
-    const notes = mode === 'merge'
-      ? `合并导入成功：${result.stats ? Object.entries(result.stats).map(([k,v]) => `${k}${v.added || 0}新增/${v.merged || 0}合并`).join('、') : '数据合并完成'}`
-      : `覆盖导入成功，已替换空间所有数据`;
+    const notes = buildImportEventNote(mode, mergeAnalysis);
     logEvent({
       entityType: 'space',
       entityId: currentSpaceId.value,
