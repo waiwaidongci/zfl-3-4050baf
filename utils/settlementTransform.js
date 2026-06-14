@@ -75,7 +75,7 @@ export function linkDepositsToSettlement(settlement, depositRecords, tripMembers
   const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
   const requestIds = new Set((tripRequestIds || []).filter(Boolean));
   const useGearFilter = tripGearIds.size > 0;
-  const useRequestFilter = Array.isArray(tripRequestIds);
+  const useRequestFilter = Array.isArray(tripRequestIds) && tripRequestIds.length > 0;
 
   const existingDepositMap = {};
   settlement.members.forEach((sm) => {
@@ -156,12 +156,12 @@ export function calculateSettlement(settlement) {
     totalDeducted += memberDeductTotal;
 
     let paymentStatus = '未支付';
-    if (paidAmount >= totalOwed && totalOwed > 0) {
+    if (totalOwed === 0) {
+      paymentStatus = '已支付';
+    } else if (paidAmount >= totalOwed) {
       paymentStatus = '已支付';
     } else if (paidAmount > 0) {
       paymentStatus = '部分支付';
-    } else if (totalOwed === 0) {
-      paymentStatus = '已支付';
     }
 
     return {
@@ -269,7 +269,7 @@ export function syncDepositChanges(settlement, depositRecords, tripGears = [], t
   const tripGearIds = new Set(tripGears.map((g) => g.gearId).filter(Boolean));
   const requestIds = new Set((tripRequestIds || []).filter(Boolean));
   const useGearFilter = tripGearIds.size > 0;
-  const useRequestFilter = Array.isArray(tripRequestIds);
+  const useRequestFilter = Array.isArray(tripRequestIds) && tripRequestIds.length > 0;
 
   const existingDepositMap = {};
   settlement.members.forEach((sm) => {
@@ -355,10 +355,13 @@ export function getSettlementStats(settlement) {
 export function getSettlementWrapupStatus(settlement) {
   if (!settlement) return null;
   const stats = getSettlementStats(settlement);
+  const allPaid = stats.paidMembers === stats.memberCount;
+  const canFinalize = settlement.status !== '已结算' && allPaid;
   return {
     hasSettlement: true,
     status: settlement.status,
-    allPaid: stats.paidMembers === stats.memberCount,
+    allPaid,
+    canFinalize,
     hasUnpaid: stats.unpaidMembers > 0,
     hasPartial: stats.partialMembers > 0,
     hasExpenses: (settlement.extraExpenses || []).length > 0,
@@ -407,12 +410,13 @@ export function markInventoryDeductionAsHandled(
 
 export function updateAllPaymentsToPaid(settlement) {
   if (!settlement) return null;
-  const members = settlement.members.map((sm) => ({
+  const calculated = calculateSettlement(settlement);
+  const members = calculated.members.map((sm) => ({
     ...sm,
     paidAmount: sm.totalOwed,
     paymentStatus: '已支付'
   }));
-  return calculateSettlement({ ...settlement, members });
+  return { ...calculated, members };
 }
 
 export function canFinalizeSettlement(settlement) {

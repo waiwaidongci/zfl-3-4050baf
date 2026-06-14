@@ -106,13 +106,18 @@ export function createDepositDeductionPayload(action, depositRecords, requestRec
   const deposit = depositRecords.find((d) => d.borrower === action.borrower && d.gearId === action.gearId);
   const request = requestRecords.find((r) => r.borrower === action.borrower && r.gearId === action.gearId);
 
+  const baseReason = '盘点异常扣除';
+  const deductReason = action.description
+    ? `${baseReason}：${action.description}`
+    : baseReason;
+
   const payload = {
     gearId: action.gearId,
     gearName: action.gearName,
     owner: action.owner,
     borrower: action.borrower || action.owner,
     deductedAmount: action.amount,
-    deductReason: action.description || '盘点异常扣除',
+    deductReason,
     requestId: request?.id || deposit?.requestId || '',
     relatedInventoryId: action.inventoryId,
     relatedInventoryActionId: action.id

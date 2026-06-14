@@ -13,7 +13,13 @@ function resolve(val) {
 }
 
 export function useInventory({ inventoryLists, gears, trips, members, currentUser }) {
-  const lists = computed(() => resolve(inventoryLists) || []);
+  const lists = computed(() => {
+    const raw = resolve(inventoryLists) || [];
+    return raw.map((list) => ({
+      ...list,
+      items: list.items.map((item) => refreshItemAbnormalFlag(item))
+    }));
+  });
   const gearList = computed(() => resolve(gears) || []);
   const tripList = computed(() => resolve(trips) || []);
   const memberList = computed(() => resolve(members) || []);

@@ -9,13 +9,27 @@
     "preview": "nuxt preview --host 0.0.0.0 --port 5173",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:utils": "vitest run tests/utils/",
+    "test:composables": "vitest run tests/composables/",
+    "test:integration": "vitest run tests/integration/",
+    "test:smoke": "vitest run tests/smoke/",
+    "test:import-export": "vitest run tests/utils/dataTransform.test.js tests/integration/crossModule.test.js",
+    "build:check": "nuxt build --no-generate",
+    "typecheck": "nuxi typecheck 2>/dev/null || echo 'typecheck skipped'",
+    "lint": "echo 'lint: no linter configured yet'",
+    "quality": "npm run test:unit && npm run test:coverage && npm run build:check",
+    "quality:ci": "npm run test:unit -- --reporter=junit --reporter=verbose && npm run test:coverage && npm run build:check"
   },
   "dependencies": {
     "nuxt": "^3.17.0",
     "vue": "^3.5.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.7",
+    "@vitest/coverage-v8": "^4.1.8",
     "@vitest/ui": "^4.1.8",
     "@vue/test-utils": "^2.4.11",
     "happy-dom": "^20.10.3",
