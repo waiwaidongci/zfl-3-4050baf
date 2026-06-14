@@ -278,7 +278,8 @@ const props = defineProps({
   gears: { type: Array, default: () => [] },
   requests: { type: Array, default: () => [] },
   inventoryLists: { type: Array, default: () => [] },
-  currentUser: { type: String, default: '' }
+  currentUser: { type: String, default: '' },
+  openSettlementId: { type: String, default: null }
 });
 
 const emit = defineEmits(['update:settlementRecords', 'log-event', 'view-timeline']);
@@ -322,6 +323,17 @@ watch(
   (val) => {
     if (val && !expenseForm.value.paidBy) {
       expenseForm.value.paidBy = val;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => props.openSettlementId,
+  (id) => {
+    if (id && props.settlementRecords.some((record) => record.id === id)) {
+      selectedId.value = id;
+      showExpenseForm.value = false;
     }
   },
   { immediate: true }

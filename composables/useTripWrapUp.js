@@ -45,7 +45,10 @@ export function useTripWrapUp({
 
   const completedTrips = computed(() => {
     const today = new Date().toISOString().slice(0, 10);
-    return tripList.value.filter((t) => t.endDate && t.endDate <= today);
+    return tripList.value.filter((t) => {
+      const finishDate = t.endDate || t.startDate;
+      return finishDate && finishDate <= today;
+    });
   });
 
   const tripGearIds = computed(() => {

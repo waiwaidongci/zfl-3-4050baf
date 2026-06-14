@@ -88,6 +88,10 @@ const props = defineProps({
   currentUser: {
     type: String,
     default: ''
+  },
+  openInventoryId: {
+    type: String,
+    default: null
   }
 });
 
@@ -131,6 +135,16 @@ watch(
     if (val && val.length > 0 && !createForm.value.checker) {
       const firstMember = val.find((m) => m.nickname === props.currentUser);
       createForm.value.checker = firstMember ? firstMember.nickname : val[0].nickname;
+    }
+  },
+  { immediate: true }
+);
+
+watch(
+  () => props.openInventoryId,
+  (id) => {
+    if (id && props.inventoryLists.some((list) => list.id === id)) {
+      selectedId.value = id;
     }
   },
   { immediate: true }
