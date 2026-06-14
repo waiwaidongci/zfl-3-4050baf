@@ -3593,7 +3593,7 @@ function handleWrapUpCreateSettlement(tripId) {
   };
   let linked = { ...newSettlement };
   if (tripDeposits.length > 0) {
-    linked = linkDepositsToSettlement(linked, tripDeposits, tripGears, tripRequestIds);
+    linked = linkDepositsToSettlement(linked, tripDeposits, tripMembers, tripGears, tripRequestIds);
   }
   const tripInventories = inventoryLists.value.filter(
     (l) => l.tripId === tripId && l.type === '出行后'
@@ -3669,6 +3669,7 @@ function handleWrapUpRefreshSettlement(settlementId) {
   const settlement = settlementRecords.value.find((s) => s.id === settlementId);
   if (!settlement) return;
   const trip = trips.value.find((t) => t.id === settlement.tripId);
+  const tripMembers = trip ? (trip.members || []) : [];
   const tripGears = trip ? (trip.gears || []) : [];
   const tripRequestIds = requests.value
     .filter((r) => r.tripId === settlement.tripId)
@@ -3681,7 +3682,7 @@ function handleWrapUpRefreshSettlement(settlementId) {
   );
   let updated = { ...settlement };
   if (tripDeposits.length > 0) {
-    updated = linkDepositsToSettlement(updated, tripDeposits, tripGears, tripRequestIds);
+    updated = linkDepositsToSettlement(updated, tripDeposits, tripMembers, tripGears, tripRequestIds);
   }
   if (tripInventories.length > 0) {
     let deductions = [];

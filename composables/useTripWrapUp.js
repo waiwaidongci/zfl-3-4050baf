@@ -45,7 +45,7 @@ export function useTripWrapUp({
 
   const completedTrips = computed(() => {
     const today = new Date().toISOString().slice(0, 10);
-    return tripList.value.filter((t) => t.startDate && t.startDate <= today);
+    return tripList.value.filter((t) => t.endDate && t.endDate <= today);
   });
 
   const tripGearIds = computed(() => {
@@ -200,7 +200,7 @@ export function useTripWrapUp({
     if (!selectedTrip.value) return 0;
     const statuses = stepStatuses.value;
     const completed = Object.values(statuses).filter((s) => s === 'completed').length;
-    const total = Object.keys(WRAPUP_STEPS).length;
+    const total = WRAPUP_STEPS.length;
     return Math.round((completed / total) * 100);
   });
 

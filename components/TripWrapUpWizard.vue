@@ -43,7 +43,7 @@
           <p class="muted">按步骤完成所有收尾工作，生成最终结算单</p>
         </div>
         <div class="progress-overview">
-          <div class="progress-circle">
+            <div class="progress-circle" :style="{ '--progress': wrapUp.overallProgress.value }">
             <span class="progress-value">{{ wrapUp.overallProgress.value }}%</span>
             <span class="progress-label">完成进度</span>
           </div>
@@ -97,7 +97,7 @@
                   <span>出借人：{{ handover.owner }}</span>
                 </div>
                 <div class="issue-actions">
-                  <button class="primary small" @click="emit('handle-return', handover.requestId)">
+                  <button class="primary small" @click="emit('handle-return', handover.id)">
                     立即归还
                   </button>
                 </div>
@@ -517,18 +517,14 @@
 </template>
 
 <script setup>
-import { ref, watch, toRef } from 'vue';
-import { useTripWrapUp, WRAPUP_STEPS } from '../composables/useTripWrapUp.js';
+import { ref, watch, computed } from 'vue';
+import { WRAPUP_STEPS } from '../composables/useTripWrapUp.js';
 
 const props = defineProps({
-  trips: { type: Array, default: () => [] },
-  members: { type: Array, default: () => [] },
-  gears: { type: Array, default: () => [] },
-  requests: { type: Array, default: () => [] },
-  handoverRecords: { type: Array, default: () => [] },
-  depositRecords: { type: Array, default: () => [] },
-  inventoryLists: { type: Array, default: () => [] },
-  settlementRecords: { type: Array, default: () => [] },
+  tripWrapUp: { type: Object, required: true },
+  selectedTripId: { type: String, default: null },
+  editingInventoryId: { type: String, default: null },
+  editingSettlementId: { type: String, default: null },
   currentUser: { type: String, default: '' }
 });
 
@@ -545,33 +541,23 @@ const emit = defineEmits([
   'finalize-settlement'
 ]);
 
-const wrapUp = useTripWrapUp({
-  trips: toRef(props, 'trips'),
-  members: toRef(props, 'members'),
-  gears: toRef(props, 'gears'),
-  requests: toRef(props, 'requests'),
-  handoverRecords: toRef(props, 'handoverRecords'),
-  depositRecords: toRef(props, 'depositRecords'),
-  inventoryLists: toRef(props, 'inventoryLists'),
-  settlementRecords: toRef(props, 'settlementRecords'),
-  currentUser: toRef(props, 'currentUser')
-});
-
+const wrapUp = computed(() => props.tripWrapUp);
 const currentStep = ref('handover');
 
 function handleSelectTrip(tripId) {
-  wrapUp.selectTrip(tripId);
-  currentStep.value = wrapUp.getNextIncompleteStep() || 'handover';
+  wrapUp.value.selectTrip(tripId);
+  currentStep.value = wrapUp.value.getNextIncompleteStep() || 'handover';
   emit('select-trip', tripId);
 }
 
 function handleBack() {
-  wrapUp.selectTrip(null);
+  wrapUp.value.selectTrip(null);
   currentStep.value = 'handover';
+  emit('select-trip', null);
 }
 
 function handleStepClick(stepKey) {
-  if (wrapUp.canProceedToStep(stepKey)) {
+  if (wrapUp.value.canProceedToStep(stepKey)) {
     currentStep.value = stepKey;
   } else {
     alert('请先完成前面的步骤');
@@ -599,22 +585,26 @@ function getInventoryProgress(inv) {
 }
 
 function getTripProgress(tripId) {
-  const prevSelected = wrapUp.selectedTripId.value;
-  wrapUp.selectTrip(tripId);
-  const progress = wrapUp.overallProgress.value;
+  const prevSelected = wrapUp.value.selectedTripId.value;
+  wrapUp.value.selectTrip(tripId);
+  const progress = wrapUp.value.overallProgress.value;
   if (prevSelected) {
-    wrapUp.selectTrip(prevSelected);
+    wrapUp.value.selectTrip(prevSelected);
   }
   return progress;
 }
 
 watch(
-  () => wrapUp.selectedTripId.value,
+  () => props.selectedTripId,
   (newId) => {
-    if (newId) {
-      currentStep.value = wrapUp.getNextIncompleteStep() || 'handover';
+    if (newId && newId !== wrapUp.value.selectedTripId.value) {
+      wrapUp.value.selectTrip(newId);
     }
-  }
+    if (newId) {
+      currentStep.value = wrapUp.value.getNextIncompleteStep() || 'handover';
+    }
+  },
+  { immediate: true }
 );
 </script>
 
